@@ -20,4 +20,4 @@
 ### 🎯┃Auto-Farm
 
 ```js
-javascript:fetch("https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOT/refs/heads/main/Auto-Farm.js").then(t=>t.text()).then(eval);
+javascript:fetch("https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOTV2/refs/heads/main/Auto-Farm.js").then(t=>t.text()).then(eval);
