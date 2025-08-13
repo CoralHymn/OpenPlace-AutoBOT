@@ -1,9 +1,23 @@
-(async () => {
-  const CONFIG = {
-    START_X: 742,
-    START_Y: 1148,
-    PIXELS_PER_LINE: 100,
-    DELAY: 1000,
+(() => {
+  // =========================================================
+  // WPlace Auto Paint (API + UI).
+  // - POST directo con {coords, colors, t} (Turnstile)
+  // - UI configurable + captura de TILE_X/TILE_Y desde 1 pintada manual
+  // - Persistencia en localStorage
+  // =========================================================
+
+  const DEFAULTS = {
+    SITEKEY: '0x4AAAAAABpqJe8FO0N84q0F', // Turnstile sitekey (ajústalo si cambia)
+    TILE_X: 1086,
+    TILE_Y: 1565,
+    TILE_SIZE: 100,          // normalmente 100x100
+    DELAY_MS: 15000,         // 15 segundos entre pintadas (predeterminado)
+    MIN_CHARGES: 10,         // mínimo de cargas para empezar a pintar
+    CHARGE_REGEN_MS: 30000,  // 1 carga cada 30 segundos
+    COLOR_MIN: 1,
+    COLOR_MAX: 32,
+    COLOR_MODE: 'random',    // 'random' | 'fixed'
+    COLOR_FIXED: 1,
     THEME: {
       primary: '#000000',
       secondary: '#111111',
@@ -11,455 +25,1091 @@
       text: '#ffffff',
       highlight: '#775ce3',
       success: '#00ff00',
-      error: '#ff0000'
+      error: '#ff0000',
+      running: '#00cc00'     // Verde para cuando está corriendo
     }
   };
 
+  // ---------- Estado ----------
+  let cfg; // Será inicializado después de definir loadCfg()
   const state = {
     running: false,
-    paintedCount: 0,
-    charges: { count: 0, max: 80, cooldownMs: 30000 },
-    userInfo: null,
-    lastPixel: null,
-    minimized: false,
-    menuOpen: false,
-    language: 'en'
+    painted: 0,
+    last: null,          // {x,y,color,status,json}
+    charges: { count: 0, max: 0, cooldownMs: 30000 },
+    user: null,
+    panel: null,
+    captureMode: false,  // sniffer activo para capturar TILE_X/Y desde un POST real
+    originalFetch: window.fetch,
+    retryCount: 0,       // contador de reintentos
+    inCooldown: false,   // si está en cooldown de 2 minutos
+    nextPaintTime: 0,    // timestamp de la próxima pintada
+    cooldownEndTime: 0,  // timestamp del final del cooldown
+    health: null         // estado de salud del backend
   };
 
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  const fetchAPI = async (url, options = {}) => {
+  // ---------- Utils ----------
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const randInt = (n) => Math.floor(Math.random() * n);
+  const log = (...a) => console.log('[WPA-UI]', ...a);
+  function saveCfg() { try { localStorage.setItem('WPA_UI_CFG', JSON.stringify(cfg)); } catch {} }
+  function loadCfg() {
     try {
-      const res = await fetch(url, {
-        credentials: 'include',
-        ...options
+      const s = localStorage.getItem('WPA_UI_CFG');
+      if (s) {
+        const loaded = { ...DEFAULTS, ...JSON.parse(s) };
+        
+        // Validar coordenadas cargadas
+        const SAFE_MIN = 200;
+        const SAFE_MAX = 3800;
+        if (loaded.TILE_X < SAFE_MIN || loaded.TILE_Y < SAFE_MIN || 
+            loaded.TILE_X > SAFE_MAX || loaded.TILE_Y > SAFE_MAX) {
+          log(`Configuración corrupta detectada: coordenadas (${loaded.TILE_X},${loaded.TILE_Y}) fuera de zona segura`);
+          resetToSafeDefaults();
+          return { ...DEFAULTS };
+        }
+        
+        return loaded;
+      }
+    } catch {}
+    return { ...DEFAULTS };
+  }
+  function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+  
+  // Resetear a configuración segura
+  function resetToSafeDefaults() {
+    try {
+      localStorage.removeItem('WPA_UI_CFG');
+      log('Configuración reseteada a valores seguros');
+    } catch {}
+  }
+  
+  // Verificar si necesita calibración inicial
+  function needsCalibration() {
+    // Verificar si las coordenadas son las por defecto
+    const hasDefaultCoords = cfg.TILE_X === DEFAULTS.TILE_X && cfg.TILE_Y === DEFAULTS.TILE_Y;
+    // También verificar si no hay configuración guardada
+    const hasNoSavedConfig = !localStorage.getItem('WPA_UI_CFG');
+    // Verificar si las coordenadas están en rango válido (considerando el canvas 4000x4000)
+    // Evitar 5% del inicio (200 pixels) y 5% del final (200 pixels)
+    const SAFE_MIN = 200; // 5% de 4000
+    const SAFE_MAX = 3800; // 95% de 4000
+    const isInDangerZone = cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || 
+                          cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX;
+    
+    const needsCalib = hasDefaultCoords || hasNoSavedConfig || isInDangerZone;
+    log(`Verificación calibración: defaults=${hasDefaultCoords}, noConfig=${hasNoSavedConfig}, danger=${isInDangerZone}, coords=(${cfg.TILE_X},${cfg.TILE_Y})`);
+    
+    return needsCalib;
+  }
+
+  // ---------- Sesión / Charges ----------
+  async function getSession() {
+    try {
+      const me = await fetch('https://backend.wplace.live/me', { credentials: 'include' }).then(r => r.json());
+      state.user = me || null;
+      const c = me?.charges || {};
+      state.charges = {
+        count: Math.floor(c.count ?? 0),
+        max: Math.floor(c.max ?? 0),
+        cooldownMs: c.cooldownMs ?? 30000
+      };
+      return me;
+    } catch (e) { return null; }
+  }
+
+  // ---------- Health Check ----------
+  async function checkBackendHealth() {
+    try {
+      const response = await fetch('https://backend.wplace.live/health', {
+        method: 'GET',
+        credentials: 'include'
       });
-      return await res.json();
-    } catch (e) {
+      
+      if (response.ok) {
+        const health = await response.json();
+        state.health = {
+          ...health,
+          lastCheck: Date.now(),
+          status: 'online'
+        };
+        log('Health check exitoso:', health);
+        return health;
+      } else {
+        state.health = {
+          database: false,
+          up: false,
+          uptime: 'N/A',
+          lastCheck: Date.now(),
+          status: 'error',
+          statusCode: response.status
+        };
+        log('Health check falló con status:', response.status);
+        return null;
+      }
+    } catch (error) {
+      state.health = {
+        database: false,
+        up: false,
+        uptime: 'N/A',
+        lastCheck: Date.now(),
+        status: 'offline',
+        error: error.message
+      };
+      log('Health check error:', error);
       return null;
     }
-  };
+  }
 
-  const getRandomPosition = () => ({
-    x: Math.floor(Math.random() * CONFIG.PIXELS_PER_LINE),
-    y: Math.floor(Math.random() * CONFIG.PIXELS_PER_LINE)
-  });
-
-  const paintPixel = async (x, y) => {
-    const randomColor = Math.floor(Math.random() * 31) + 1;
-    return await fetchAPI(`https://backend.wplace.live/s0/pixel/${CONFIG.START_X}/${CONFIG.START_Y}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: JSON.stringify({ coords: [x, y], colors: [randomColor] })
+  // ---------- Turnstile ----------
+  function loadTurnstile() {
+    return new Promise((resolve, reject) => {
+      if (window.turnstile) return resolve();
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      s.async = true; s.defer = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('No se pudo cargar Turnstile'));
+      document.head.appendChild(s);
     });
-  };
-
-  const getCharge = async () => {
-    const data = await fetchAPI('https://backend.wplace.live/me');
-    if (data) {
-      state.userInfo = data;
-      state.charges = {
-        count: Math.floor(data.charges.count),
-        max: Math.floor(data.charges.max),
-        cooldownMs: data.charges.cooldownMs
-      };
-      if (state.userInfo.level) {
-        state.userInfo.level = Math.floor(state.userInfo.level);
-      }
+  }
+  async function getTurnstileToken() {
+    await loadTurnstile();
+    if (typeof window.turnstile?.execute === 'function') {
+      try {
+        const token = await window.turnstile.execute(cfg.SITEKEY, { action: 'paint' });
+        if (token && token.length > 20) return token;
+      } catch (e) { /* fallback abajo */ }
     }
-    return state.charges;
-  };
+    // Fallback: render oculto
+    return await new Promise((resolve) => {
+      const host = document.createElement('div');
+      host.style.position = 'fixed'; host.style.left = '-9999px';
+      document.body.appendChild(host);
+      window.turnstile.render(host, { sitekey: cfg.SITEKEY, callback: (t) => resolve(t) });
+    });
+  }
 
-  const detectUserLocation = async () => {
+  // ---------- API backend ----------
+  function randomCoords() {
+    // Aplicar márgenes de seguridad del 5% en cada lado para evitar errores en los bordes
+    const margin = Math.floor(cfg.TILE_SIZE * 0.05); // 5% del tamaño del tile
+    const safeSize = cfg.TILE_SIZE - (margin * 2); // Área segura descontando márgenes
+    
+    // Validar que el área segura sea válida
+    if (safeSize <= 0) {
+      log('Error: área segura inválida, usando coordenadas básicas');
+      return [randInt(cfg.TILE_SIZE), randInt(cfg.TILE_SIZE)];
+    }
+    
+    // Generar coordenadas dentro del área segura
+    const x = margin + randInt(safeSize);
+    const y = margin + randInt(safeSize);
+    
+    // Log para debugging (solo ocasionalmente)
+    if (Math.random() < 0.1) { // 10% de las veces
+      log(`Coordenadas generadas: (${x},${y}) en área segura [${margin}-${margin + safeSize - 1}]`);
+    }
+    
+    return [x, y];
+  }
+  function nextColor() {
+    if (cfg.COLOR_MODE === 'fixed') {
+      return clamp(parseInt(cfg.COLOR_FIXED,10)||1, cfg.COLOR_MIN, cfg.COLOR_MAX);
+    }
+    const span = cfg.COLOR_MAX - cfg.COLOR_MIN + 1;
+    return cfg.COLOR_MIN + randInt(span);
+  }
+
+  // Función para actualizar el canvas visualmente
+  async function updateCanvasPixel(worldX, worldY, color) {
     try {
-      const response = await fetch('https://ipapi.co/json/');
-      const data = await response.json();
-      if (data.country === 'BR') {
-        state.language = 'pt';
-      } else if (data.country === 'US') {
-        state.language = 'en';
-      } else {
-        state.language = 'en';
-      }
-    } catch {
-      state.language = 'en';
-    }
-  };
+      // Buscar elementos del canvas que puedan necesitar actualización
+      const canvasElements = document.querySelectorAll('canvas');
+      canvasElements.forEach(canvas => {
+        try {
+          // Intentar forzar un redibujado del canvas
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Emitir eventos para que el canvas se actualice
+            const event = new CustomEvent('pixel-painted', {
+              detail: { x: worldX, y: worldY, color }
+            });
+            canvas.dispatchEvent(event);
+          }
+        } catch (e) {
+          // Ignorar errores de canvas específicos
+        }
+      });
 
-  const paintLoop = async () => {
+      // Intentar actualizar tiles específicos si existen elementos con data-tile
+      const tileElements = document.querySelectorAll(`[data-tile-x="${cfg.TILE_X}"][data-tile-y="${cfg.TILE_Y}"]`);
+      tileElements.forEach(tile => {
+        try {
+          // Forzar actualización del tile
+          if (tile.style) {
+            tile.style.opacity = '0.8';
+            setTimeout(() => { tile.style.opacity = '1'; }, 100);
+          }
+        } catch (e) {}
+      });
+
+      // Buscar y actualizar elementos que contengan coordenadas
+      const coordElements = document.querySelectorAll('[class*="tile"], [class*="canvas"], [id*="canvas"]');
+      coordElements.forEach(el => {
+        try {
+          if (el.getAttribute && (el.getAttribute('data-x') == worldX || el.getAttribute('data-y') == worldY)) {
+            el.style.filter = 'brightness(1.2)';
+            setTimeout(() => { el.style.filter = ''; }, 200);
+          }
+        } catch (e) {}
+      });
+
+    } catch (error) {
+      log('Error actualizando canvas:', error);
+    }
+  }
+
+  // Función para refrescar el tile específico
+  async function refreshTile(tileX, tileY) {
+    try {
+      // Hacer una petición GET para obtener el estado actual del tile
+      const tileUrl = `https://backend.wplace.live/s0/tile/${tileX}/${tileY}`;
+      const response = await fetch(tileUrl, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' }
+      });
+      
+      if (response.ok) {
+        // Si hay algún elemento en el DOM que represente este tile, actualizarlo
+        const tileSelector = `[data-tile="${tileX}-${tileY}"], .tile-${tileX}-${tileY}`;
+        const tileElement = document.querySelector(tileSelector);
+        if (tileElement) {
+          // Añadir una clase temporal para indicar actualización
+          tileElement.classList.add('tile-updating');
+          setTimeout(() => {
+            tileElement.classList.remove('tile-updating');
+            tileElement.classList.add('tile-updated');
+            setTimeout(() => tileElement.classList.remove('tile-updated'), 1000);
+          }, 100);
+        }
+      }
+    } catch (error) {
+      log('Error refrescando tile:', error);
+    }
+  }
+
+  async function postPixel(coords, color, t) {
+    const body = JSON.stringify({ colors: [color], coords, t });
+    const res = await fetch(`https://backend.wplace.live/s0/pixel/${cfg.TILE_X}/${cfg.TILE_Y}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      body
+    });
+    let json = null; try { json = await res.json(); } catch {}
+    return { status: res.status, json };
+  }
+
+  async function paintOnce() {
+    // Verificar que las coordenadas del tile sean seguras antes de pintar
+    const SAFE_MIN = 200; // 5% de 4000
+    const SAFE_MAX = 3800; // 95% de 4000
+    
+    if (cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX) {
+      setStatus(`🚫 Coordenadas peligrosas (${cfg.TILE_X},${cfg.TILE_Y}). Calibra en zona segura (${SAFE_MIN}-${SAFE_MAX})`, 'error');
+      log(`Pintado cancelado: coordenadas (${cfg.TILE_X},${cfg.TILE_Y}) están fuera de zona segura`);
+      return false;
+    }
+    
+    const coords = randomCoords();
+    const color  = nextColor();
+    const worldX = cfg.TILE_X + coords[0];
+    const worldY = cfg.TILE_Y + coords[1];
+    
+    // Verificación adicional de coordenadas finales
+    if (worldX < SAFE_MIN || worldY < SAFE_MIN || worldX > SAFE_MAX || worldY > SAFE_MAX) {
+      setStatus(`🚫 Coordenadas finales peligrosas (${worldX},${worldY}). Recalibrando...`, 'error');
+      log(`Coordenadas finales fuera de zona segura: (${worldX},${worldY})`);
+      return false;
+    }
+    
+    setStatus(`🎨 Pintando pixel en (${worldX},${worldY}) color ${color}...`, 'status');
+    
+    const t = await getTurnstileToken();
+    const r = await postPixel(coords, color, t);
+
+    state.last = { x: worldX, y: worldY, color, status: r.status, json: r.json };
+    
+    if (r.status === 200 && r.json && r.json.painted === 1) {
+      state.painted++;
+      state.retryCount = 0; // Resetear contador de reintentos al éxito
+      
+      // Actualizar visualmente el canvas
+      await updateCanvasPixel(worldX, worldY, color);
+      
+      // Refrescar el tile específico
+      await refreshTile(cfg.TILE_X, cfg.TILE_Y);
+      
+      // Actualizar la sesión para obtener las cargas actualizadas
+      await getSession();
+      
+      setStatus(`✅ Pixel pintado exitosamente en (${worldX},${worldY}) con color ${color}`, 'success');
+      flashEffect();
+      
+      // Emitir evento personalizado para notificar que se pintó un pixel
+      const event = new CustomEvent('wplace-pixel-painted', {
+        detail: { 
+          x: worldX, 
+          y: worldY, 
+          color: color,
+          tileX: cfg.TILE_X,
+          tileY: cfg.TILE_Y,
+          coords: coords,
+          timestamp: Date.now()
+        }
+      });
+      window.dispatchEvent(event);
+      
+      return true;
+    }
+    
+    // Manejo de errores mejorado
+    if (r.status === 403) {
+      setStatus('⚠️ 403 (token expirado o Cloudflare). Reintentará...', 'error');
+    } else if (r.status === 401) {
+      setStatus('🔒 401 (no autorizado). Verifica tu sesión.', 'error');
+    } else if (r.status === 429) {
+      setStatus('⏳ 429 (límite de tasa). Esperando...', 'error');
+    } else if (r.status === 408) {
+      setStatus('⏰ 408 (timeout del servidor). Coordenadas problemáticas o servidor sobrecargado', 'error');
+    } else {
+      // Para otros errores, verificar el health del backend
+      await checkBackendHealth();
+      const healthStatus = state.health?.up ? '🟢 Online' : '🔴 Offline';
+      setStatus(`❌ Error ${r.status}: ${r.json?.message || 'Fallo al pintar'} (Backend: ${healthStatus})`, 'error');
+    }
+    
+    return false;
+  }
+
+  async function paintWithRetry() {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const success = await paintOnce();
+      if (success) {
+        return true;
+      }
+      
+      state.retryCount = attempt;
+      if (attempt < 3) {
+        setStatus(`❌ Intento ${attempt}/3 falló. Reintentando en 5s...`, 'error');
+        await sleep(5000);
+      }
+    }
+    
+    // Si llegamos aquí, fallaron los 3 intentos
+    state.inCooldown = true;
+    state.cooldownEndTime = Date.now() + (2 * 60 * 1000); // 2 minutos
+    state.retryCount = 0;
+    setStatus('🚫 3 intentos fallidos. Cooldown de 2 minutos...', 'error');
+    return false;
+  }
+
+  async function loop() {
+    // Verificar calibración antes de empezar
+    if (needsCalibration()) {
+      setStatus('🎯 Calibración requerida antes de iniciar el bot', 'error');
+      enableCaptureOnce();
+      
+      // Esperar hasta que se complete la calibración
+      while (state.captureMode && state.running) {
+        await sleep(1000);
+      }
+      
+      // Verificar si se capturó correctamente
+      if (needsCalibration()) {
+        setStatus('❌ Calibración cancelada. Deteniendo bot...', 'error');
+        state.running = false;
+        updateButtonStates();
+        return;
+      } else {
+        setStatus('✅ Calibración completada. Iniciando bot...', 'success');
+        await sleep(2000); // Mostrar mensaje por 2 segundos
+      }
+    }
+
     while (state.running) {
+      // Verificar si estamos en cooldown
+      if (state.inCooldown) {
+        const now = Date.now();
+        if (now < state.cooldownEndTime) {
+          const remainingMs = state.cooldownEndTime - now;
+          const remainingSec = Math.ceil(remainingMs / 1000);
+          setStatus(`🚫 Cooldown activo: ${remainingSec}s restantes`, 'error');
+          await sleep(1000);
+          updateStats();
+          continue;
+        } else {
+          // Cooldown terminado
+          state.inCooldown = false;
+          state.cooldownEndTime = 0;
+          setStatus('✅ Cooldown terminado. Continuando...', 'success');
+        }
+      }
+
       const { count, cooldownMs } = state.charges;
       
-      if (count < 1) {
-        updateUI(state.language === 'pt' ? `⌛ Sem cargas. Esperando ${Math.ceil(cooldownMs/1000)}s...` : `⌛ No charges. Waiting ${Math.ceil(cooldownMs/1000)}s...`, 'status');
-        await sleep(cooldownMs);
-        await getCharge();
+      // Verificar si tenemos suficientes cargas para empezar
+      if (count < cfg.MIN_CHARGES) {
+        const chargesNeeded = cfg.MIN_CHARGES - count;
+        const waitTimeMs = chargesNeeded * cfg.CHARGE_REGEN_MS;
+        const waitTimeSec = Math.ceil(waitTimeMs / 1000);
+        
+        setStatus(`⌛ Esperando ${cfg.MIN_CHARGES} cargas (faltan ${chargesNeeded}). Tiempo estimado: ${waitTimeSec}s`, 'status');
+        
+        // Esperar el tiempo de regeneración o el cooldown, lo que sea mayor
+        const actualWaitTime = Math.max(waitTimeMs, cooldownMs);
+        await sleep(actualWaitTime);
+        await getSession();
+        updateStats();
         continue;
       }
-
-      const randomPos = getRandomPosition();
-      const paintResult = await paintPixel(randomPos.x, randomPos.y);
       
-      if (paintResult?.painted === 1) {
-        state.paintedCount++;
-        state.lastPixel = { 
-          x: CONFIG.START_X + randomPos.x,
-          y: CONFIG.START_Y + randomPos.y,
-          time: new Date() 
-        };
-        state.charges.count--;
-        
-        document.getElementById('paintEffect').style.animation = 'pulse 0.5s';
-        setTimeout(() => {
-          document.getElementById('paintEffect').style.animation = '';
-        }, 500);
-        
-        updateUI(state.language === 'pt' ? '✅ Pixel pintado!' : '✅ Pixel painted!', 'success');
-      } else {
-        updateUI(state.language === 'pt' ? '❌ Falha ao pintar' : '❌ Failed to paint', 'error');
-      }
-
-      await sleep(CONFIG.DELAY);
+      // Si tenemos suficientes cargas, pintar
+      state.nextPaintTime = Date.now() + cfg.DELAY_MS;
+      const paintSuccess = await paintWithRetry();
       updateStats();
+      
+      // Si el pixel se pintó exitosamente, mantener el mensaje de éxito por 3 segundos
+      if (paintSuccess) {
+        await sleep(3000); // Mostrar mensaje de éxito por 3 segundos
+        // Luego mostrar countdown con el tiempo restante
+        const remainingDelay = cfg.DELAY_MS - 3000;
+        if (remainingDelay > 0) {
+          await sleepWithCountdown(remainingDelay);
+        }
+      } else {
+        // Si falló, mostrar countdown completo
+        await sleepWithCountdown(cfg.DELAY_MS);
+      }
     }
-  };
+  }
 
-  const createUI = () => {
-    if (state.menuOpen) return;
-    state.menuOpen = true;
+  async function sleepWithCountdown(ms) {
+    const endTime = Date.now() + ms;
+    while (Date.now() < endTime && state.running) {
+      const remainingMs = endTime - Date.now();
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      if (remainingSec > 0) {
+        setStatus(`⏳ Próxima pintada en: ${remainingSec}s`, 'status');
+      }
+      await sleep(1000);
+    }
+  }
 
-    const fontAwesome = document.createElement('link');
-    fontAwesome.rel = 'stylesheet';
-    fontAwesome.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
-    document.head.appendChild(fontAwesome);
+  // ---------- Captura TILE_X / TILE_Y (sniffer) ----------
+  function enableCaptureOnce() {
+    if (state.captureMode) return;
+    state.captureMode = true;
+    setStatus('🎯 Esperando calibración: pinta un pixel manualmente...', 'status');
 
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+    window.fetch = async function(resource, init) {
+      try {
+        let url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+        if (state.captureMode && url.includes('/s0/pixel/')) {
+          // Extrae TILE_X/Y del path
+          try {
+            const u = new URL(url, location.origin);
+            const parts = (u.pathname || '').split('/').filter(Boolean); // ["s0","pixel","1086","1565"]
+            const px = parseInt(parts[2],10), py = parseInt(parts[3],10);
+            if (Number.isFinite(px) && Number.isFinite(py)) {
+              // Validar que las coordenadas estén en zona segura
+              const SAFE_MIN = 200; // 5% de 4000
+              const SAFE_MAX = 3800; // 95% de 4000
+              
+              if (px < SAFE_MIN || py < SAFE_MIN || px > SAFE_MAX || py > SAFE_MAX) {
+                setStatus(`⚠️ Coordenadas peligrosas: (${px},${py}). Pinta en una zona más central (entre ${SAFE_MIN}-${SAFE_MAX})`, 'error');
+                log(`Coordenadas rechazadas por estar en zona peligrosa: (${px},${py})`);
+                return state.originalFetch.apply(this, arguments);
+              }
+              
+              cfg.TILE_X = px; cfg.TILE_Y = py; saveCfg();
+              fillInputsFromCfg();
+              
+              // Calcular información del área segura
+              const margin = Math.floor(cfg.TILE_SIZE * 0.05);
+              const safeMinX = px + margin;
+              const safeMaxX = px + cfg.TILE_SIZE - margin - 1;
+              const safeMinY = py + margin;
+              const safeMaxY = py + cfg.TILE_SIZE - margin - 1;
+              
+              setStatus(`✅ Coordenadas capturadas: ${px}/${py} (área segura: ${safeMinX}-${safeMaxX}, ${safeMinY}-${safeMaxY})`, 'success');
+              log(`Tile capturado: ${px}/${py}, área segura: (${safeMinX},${safeMinY}) a (${safeMaxX},${safeMaxY})`);
+            }
+          } catch {}
+          // desactiva sniffer tras la primera coincidencia
+          window.fetch = state.originalFetch;
+          state.captureMode = false;
+        }
+      } catch {}
+      return state.originalFetch.apply(this, arguments);
+    };
+  }
+
+  // ---------- UI Functions ----------
+  function updateButtonStates() {
+    const el = {
+      start: $('#wpa-start'),
+      stop: $('#wpa-stop'),
+      running: $('#wpa-running')
+    };
+    
+    if (state.running) {
+      el.start?.classList.add('running');
+      if (el.start) el.start.textContent = 'Ejecutando...';
+      el.stop?.classList.add('active');
+      if (el.running) {
+        el.running.textContent = '🟢 Activo';
+        el.running.style.color = cfg.THEME.success;
       }
-      @keyframes slideIn {
-        from { transform: translateY(20px); opacity: 0; }
-        to { transform: translateY(0); opacity: 1; }
+    } else {
+      el.start?.classList.remove('running');
+      if (el.start) el.start.textContent = 'Start';
+      el.stop?.classList.remove('active');
+      if (el.running) {
+        el.running.textContent = '🔴 Detenido';
+        el.running.style.color = cfg.THEME.error;
       }
-      .wplace-bot-panel {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        width: 250px;
-        background: ${CONFIG.THEME.primary};
-        border: 1px solid ${CONFIG.THEME.accent};
-        border-radius: 8px;
-        padding: 0;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-        z-index: 9999;
-        font-family: 'Segoe UI', Roboto, sans-serif;
-        color: ${CONFIG.THEME.text};
-        animation: slideIn 0.4s ease-out;
-        overflow: hidden;
+    }
+  }
+
+  function createUI() {
+    if (state.panel) return;
+    const css = `
+      @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,255,0,.7)}70%{box-shadow:0 0 0 10px rgba(0,255,0,0)}100%{box-shadow:0 0 0 0 rgba(0,255,0,0)}}
+      @keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+      @keyframes pixelPaint{0%{filter:brightness(1)}50%{filter:brightness(1.5) saturate(1.3)}100%{filter:brightness(1)}}
+      @keyframes tileUpdate{0%{transform:scale(1)}50%{transform:scale(1.02)}100%{transform:scale(1)}}
+      
+      .wpa-panel{position:fixed;top:20px;right:20px;width:300px;background:${cfg.THEME.primary};border:1px solid ${cfg.THEME.accent};border-radius:10px;color:${cfg.THEME.text};font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;z-index:999999;box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden;animation:slideIn .3s}
+      .wpa-head{display:flex;justify-content:space-between;align-items:center;background:${cfg.THEME.secondary};padding:10px 12px;color:${cfg.THEME.highlight};font-weight:600}
+      .wpa-body{padding:12px}
+      .wpa-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+      .wpa-row{display:flex;gap:8px;margin:8px 0}
+      .wpa-input, .wpa-select{width:100%;padding:6px 8px;border-radius:6px;border:1px solid ${cfg.THEME.accent};background:#0f0f0f;color:${cfg.THEME.text}}
+      .wpa-btn{flex:1;padding:9px;border:none;border-radius:8px;font-weight:700;cursor:pointer;transition:all 0.2s}
+      .wpa-btn.primary{background:${cfg.THEME.accent};color:#fff}
+      .wpa-btn.primary:hover{background:${cfg.THEME.highlight}}
+      .wpa-btn.primary.running{background:${cfg.THEME.running};color:#fff;box-shadow:0 0 10px rgba(0,204,0,0.3)}
+      .wpa-btn.stop{background:${cfg.THEME.error};color:#fff}
+      .wpa-btn.stop.active{background:#cc0000;box-shadow:0 0 8px rgba(255,0,0,0.3)}
+      .wpa-btn.ghost{background:transparent;border:1px solid ${cfg.THEME.accent};color:${cfg.THEME.text}}
+      .wpa-btn.ghost:hover{background:${cfg.THEME.accent}22}
+      .wpa-card{background:${cfg.THEME.secondary};padding:10px;border-radius:8px;margin-top:10px}
+      .wpa-stat{display:flex;justify-content:space-between;margin:4px 0;font-size:13px;opacity:.95}
+      .wpa-status{margin-top:10px;padding:8px;border-radius:6px;text-align:center;font-size:13px;background:rgba(255,255,255,.08);transition:all 0.3s}
+      .wpa-status.success{background:rgba(0,255,0,.12);color:${cfg.THEME.success}}
+      .wpa-status.error{background:rgba(255,0,0,.12);color:${cfg.THEME.error}}
+      #wpa-effect{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;border-radius:10px}
+      
+      /* Estilos para tiles actualizados */
+      .tile-updating{animation:tileUpdate 0.3s ease-in-out;}
+      .tile-updated{animation:pixelPaint 0.5s ease-in-out;}
+      
+      /* Indicador de pixel pintado */
+      .pixel-painted{
+        position:relative;
       }
-      .wplace-header {
-        padding: 12px 15px;
-        background: ${CONFIG.THEME.secondary};
-        color: ${CONFIG.THEME.highlight};
-        font-size: 16px;
-        font-weight: 600;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        cursor: move;
-        user-select: none;
+      .pixel-painted::after{
+        content:'✓';
+        position:absolute;
+        top:-5px;
+        right:-5px;
+        background:${cfg.THEME.success};
+        color:white;
+        border-radius:50%;
+        width:12px;
+        height:12px;
+        font-size:8px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        animation:fadeInOut 2s ease-in-out;
       }
-      .wplace-header-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .wplace-header-controls {
-        display: flex;
-        gap: 10px;
-      }
-      .wplace-header-btn {
-        background: none;
-        border: none;
-        color: ${CONFIG.THEME.text};
-        cursor: pointer;
-        opacity: 0.7;
-        transition: opacity 0.2s;
-      }
-      .wplace-header-btn:hover {
-        opacity: 1;
-      }
-      .wplace-content {
-        padding: 15px;
-        display: ${state.minimized ? 'none' : 'block'};
-      }
-      .wplace-controls {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 15px;
-      }
-      .wplace-btn {
-        flex: 1;
-        padding: 10px;
-        border: none;
-        border-radius: 6px;
-        font-weight: 600;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        transition: all 0.2s;
-      }
-      .wplace-btn:hover {
-        transform: translateY(-2px);
-      }
-      .wplace-btn-primary {
-        background: ${CONFIG.THEME.accent};
-        color: white;
-      }
-      .wplace-btn-stop {
-        background: ${CONFIG.THEME.error};
-        color: white;
-      }
-      .wplace-stats {
-        background: ${CONFIG.THEME.secondary};
-        padding: 12px;
-        border-radius: 6px;
-        margin-bottom: 15px;
-      }
-      .wplace-stat-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 6px 0;
-        font-size: 14px;
-      }
-      .wplace-stat-label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        opacity: 0.8;
-      }
-      .wplace-status {
-        padding: 8px;
-        border-radius: 4px;
-        text-align: center;
-        font-size: 13px;
-      }
-      .status-default {
-        background: rgba(255,255,255,0.1);
-      }
-      .status-success {
-        background: rgba(0, 255, 0, 0.1);
-        color: ${CONFIG.THEME.success};
-      }
-      .status-error {
-        background: rgba(255, 0, 0, 0.1);
-        color: ${CONFIG.THEME.error};
-      }
-      #paintEffect {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        border-radius: 8px;
+      
+      @keyframes fadeInOut{
+        0%{opacity:0;transform:scale(0)}
+        50%{opacity:1;transform:scale(1)}
+        100%{opacity:0;transform:scale(0)}
       }
     `;
-    document.head.appendChild(style);
-
-    const translations = {
-      pt: {
-        title: "WPlace Auto-Farm",
-        start: "Iniciar",
-        stop: "Parar",
-        ready: "Pronto para começar",
-        user: "Usuário",
-        pixels: "Pixels",
-        charges: "Cargas",
-        level: "Level"
-      },
-      en: {
-        title: "WPlace Auto-Farm",
-        start: "Start",
-        stop: "Stop",
-        ready: "Ready to start",
-        user: "User",
-        pixels: "Pixels",
-        charges: "Charges",
-        level: "Level"
-      }
-    };
-
-    const t = translations[state.language] || translations.en;
+    const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
 
     const panel = document.createElement('div');
-    panel.className = 'wplace-bot-panel';
+    panel.className = 'wpa-panel';
     panel.innerHTML = `
-      <div id="paintEffect"></div>
-      <div class="wplace-header">
-        <div class="wplace-header-title">
-          <i class="fas fa-paint-brush"></i>
-          <span>${t.title}</span>
-        </div>
-        <div class="wplace-header-controls">
-          <button id="minimizeBtn" class="wplace-header-btn" title="${state.language === 'pt' ? 'Minimizar' : 'Minimize'}">
-            <i class="fas fa-${state.minimized ? 'expand' : 'minus'}"></i>
-          </button>
-        </div>
+      <div id="wpa-effect"></div>
+      <div class="wpa-head">
+        <div>WPlace Auto Paint</div>
       </div>
-      <div class="wplace-content">
-        <div class="wplace-controls">
-          <button id="toggleBtn" class="wplace-btn wplace-btn-primary">
-            <i class="fas fa-play"></i>
-            <span>${t.start}</span>
-          </button>
-        </div>
-        
-        <div class="wplace-stats">
-          <div id="statsArea">
-            <div class="wplace-stat-item">
-              <div class="wplace-stat-label"><i class="fas fa-paint-brush"></i> ${state.language === 'pt' ? 'Carregando...' : 'Loading...'}</div>
-            </div>
+      <div class="wpa-body">
+        <div class="wpa-grid">
+          <div><label>Tamaño</label><input id="wpa-size" class="wpa-input" type="number" /></div>
+          <div><label>Delay (seg)</label><input id="wpa-delay" class="wpa-input" type="number" min="5" max="300" /></div>
+          <div><label>Min. Cargas</label><input id="wpa-mincharges" class="wpa-input" type="number" min="1" max="50" /></div>
+          <div><label>Sitekey</label><input id="wpa-sitekey" class="wpa-input" type="text" /></div>
+          <div>
+            <label>Color</label>
+            <select id="wpa-cmode" class="wpa-select">
+              <option value="random">Random</option>
+              <option value="fixed">Fijo</option>
+            </select>
           </div>
+          <div id="wpa-cfixed-container"><label>Color fijo (1-32)</label><input id="wpa-cfixed" class="wpa-input" type="number" min="1" max="32"/></div>
         </div>
-        
-        <div id="statusText" class="wplace-status status-default">
-          ${t.ready}
+
+        <div class="wpa-row" style="margin-top:12px">
+          <button id="wpa-start" class="wpa-btn primary">Start</button>
+          <button id="wpa-once"  class="wpa-btn ghost">Once</button>
+          <button id="wpa-stop"  class="wpa-btn ghost">Stop</button>
         </div>
+
+        <div class="wpa-card" id="wpa-stats">
+          <div class="wpa-stat"><span>User</span><span id="wpa-user">-</span></div>
+          <div class="wpa-stat"><span>Charges</span><span id="wpa-charges">-</span></div>
+          <div class="wpa-stat"><span>Painted</span><span id="wpa-painted">0</span></div>
+          <div class="wpa-stat"><span>Último</span><span id="wpa-last">-</span></div>
+          <div class="wpa-stat"><span>Estado</span><span id="wpa-running">🔴 Detenido</span></div>
+          <div class="wpa-stat" id="wpa-retry-info" style="display:none"><span>Reintentos</span><span id="wpa-retries">0/3</span></div>
+        </div>
+
+        <div class="wpa-card" id="wpa-health">
+          <div class="wpa-stat"><span>Backend</span><span id="wpa-backend-status">🔄 Verificando...</span></div>
+          <div class="wpa-stat"><span>Database</span><span id="wpa-database-status">-</span></div>
+          <div class="wpa-stat"><span>Uptime</span><span id="wpa-uptime">-</span></div>
+        </div>
+
+        <div id="wpa-status" class="wpa-status">Ready</div>
       </div>
     `;
-    
     document.body.appendChild(panel);
+    state.panel = panel;
+
+    // Inputs
+    const el = {
+      size: $('#wpa-size'), delay: $('#wpa-delay'),
+      mincharges: $('#wpa-mincharges'), sitekey: $('#wpa-sitekey'), cmode: $('#wpa-cmode'), cfixed: $('#wpa-cfixed'),
+      start: $('#wpa-start'), once: $('#wpa-once'), stop: $('#wpa-stop'),
+      status: $('#wpa-status'), user: $('#wpa-user'), charges: $('#wpa-charges'),
+      painted: $('#wpa-painted'), last: $('#wpa-last'), running: $('#wpa-running'), 
+      retries: $('#wpa-retries'), retryInfo: $('#wpa-retry-info'),
+      effect: $('#wpa-effect')
+    };
+
+    function bindInputs() {
+      el.size.addEventListener('change', () => { cfg.TILE_SIZE = clamp(parseInt(el.size.value,10)||cfg.TILE_SIZE, 1, 1000); saveCfg(); });
+      el.delay.addEventListener('change', () => { 
+        const delaySec = clamp(parseInt(el.delay.value,10)||15, 5, 300);
+        cfg.DELAY_MS = delaySec * 1000; // Convertir segundos a milisegundos
+        el.delay.value = delaySec; // Asegurar que el input muestre el valor clampado
+        saveCfg(); 
+      });
+      el.mincharges.addEventListener('change', () => { cfg.MIN_CHARGES = clamp(parseInt(el.mincharges.value,10)||cfg.MIN_CHARGES, 1, 50); saveCfg(); });
+      el.sitekey.addEventListener('change', () => { cfg.SITEKEY = el.sitekey.value.trim() || cfg.SITEKEY; saveCfg(); });
+      el.cmode.addEventListener('change', () => { 
+        cfg.COLOR_MODE = el.cmode.value; 
+        toggleColorFixedField();
+        saveCfg(); 
+      });
+      el.cfixed.addEventListener('change', () => { cfg.COLOR_FIXED = clamp(parseInt(el.cfixed.value,10)||1, cfg.COLOR_MIN, cfg.COLOR_MAX); el.cfixed.value = cfg.COLOR_FIXED; saveCfg(); });
+    }
+
+    function toggleColorFixedField() {
+      const container = $('#wpa-cfixed-container');
+      if (container) {
+        container.style.display = cfg.COLOR_MODE === 'fixed' ? 'block' : 'none';
+      }
+    }
+
+    function bindButtons() {
+      el.start.onclick = async () => {
+        if (!state.running) {
+          state.running = true;
+          updateButtonStates();
+          setStatus('🚀 Empezando…','status');
+          loop();
+        }
+      };
+      el.stop.onclick = () => { 
+        state.running = false; 
+        // También cancelar captura si está activa
+        if (state.captureMode) {
+          state.captureMode = false;
+          window.fetch = state.originalFetch;
+        }
+        updateButtonStates();
+        setStatus('⏸️ Bot detenido por el usuario','error'); 
+      };
+      el.once.onclick = async () => { 
+        // Verificar calibración antes de pintar
+        if (needsCalibration()) {
+          setStatus('🎯 Calibración requerida: pinta un pixel manualmente primero', 'error');
+          enableCaptureOnce();
+          return;
+        }
+        setStatus('⏳ Intentando…','status'); 
+        await paintWithRetry(); 
+        updateStats(); 
+      };
+    }
+
+    bindInputs(); bindButtons();
+    fillInputsFromCfg();
+    toggleColorFixedField(); // Inicializar visibilidad del campo color fijo
+    updateStats();
+    updateButtonStates(); // Inicializar estados de botones
+    dragHeader(panel.querySelector('.wpa-head'), panel);
+  }
+
+  function fillInputsFromCfg() {
+    $('#wpa-size').value = cfg.TILE_SIZE;
+    $('#wpa-delay').value = Math.floor(cfg.DELAY_MS / 1000); // Mostrar en segundos
+    $('#wpa-mincharges').value = cfg.MIN_CHARGES;
+    $('#wpa-sitekey').value = cfg.SITEKEY;
+    $('#wpa-cmode').value = cfg.COLOR_MODE;
+    $('#wpa-cfixed').value = cfg.COLOR_FIXED;
+  }
+
+  function setStatus(msg, kind='status') {
+    const el = $('#wpa-status'); if (!el) return;
+    el.className = `wpa-status ${kind}`;
+    el.textContent = msg;
+  }
+
+  function flashEffect() {
+    const fx = $('#wpa-effect'); 
+    if (!fx) return;
     
-    const header = panel.querySelector('.wplace-header');
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    // Efecto de pulso verde para éxito
+    fx.style.animation = 'pulse .5s';
+    fx.style.background = 'radial-gradient(circle, rgba(0,255,0,0.1) 0%, transparent 70%)';
     
-    header.onmousedown = dragMouseDown;
+    setTimeout(() => {
+      fx.style.animation = '';
+      fx.style.background = '';
+    }, 500);
     
-    function dragMouseDown(e) {
-      if (e.target.closest('.wplace-header-btn')) return;
+    // Agregar efecto de brillo al panel
+    const panel = state.panel;
+    if (panel) {
+      panel.style.boxShadow = '0 8px 24px rgba(0,255,0,.3), 0 0 20px rgba(0,255,0,.2)';
+      setTimeout(() => {
+        panel.style.boxShadow = '0 8px 24px rgba(0,0,0,.5)';
+      }, 800);
+    }
+  }
+
+  async function updateStats() {
+    await getSession();
+    $('#wpa-user').textContent = state.user?.name || '-';
+    $('#wpa-charges').textContent = `${Math.floor(state.charges.count)}/${Math.floor(state.charges.max)}`;
+    $('#wpa-painted').textContent = String(state.painted);
+    
+    // Mostrar información de reintentos solo si hay reintentos activos
+    if (state.retryCount > 0) {
+      $('#wpa-retries').textContent = `${state.retryCount}/3`;
+      $('#wpa-retry-info').style.display = 'flex';
+    } else {
+      $('#wpa-retry-info').style.display = 'none';
+    }
+    
+    if (state.last) {
+      const j = state.last;
+      const statusIcon = j.status === 200 ? '✅' : j.status === 403 ? '⚠️' : '❌';
+      $('#wpa-last').textContent = `${statusIcon} ${j.status} @ (${j.x},${j.y}) c${j.color}`;
       
-      e = e || window.event;
-      e.preventDefault();
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      document.onmouseup = closeDragElement;
-      document.onmousemove = elementDrag;
+      // Agregar información adicional si hay JSON de respuesta
+      if (j.json) {
+        const additionalInfo = j.json.painted === 1 ? ' ✓' : 
+                              j.json.message ? ` (${j.json.message})` : '';
+        $('#wpa-last').textContent += additionalInfo;
+      }
     }
     
-    function elementDrag(e) {
-      e = e || window.event;
-      e.preventDefault();
-      pos1 = pos3 - e.clientX;
-      pos2 = pos4 - e.clientY;
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      panel.style.top = (panel.offsetTop - pos2) + "px";
-      panel.style.left = (panel.offsetLeft - pos1) + "px";
-    }
-    
-    function closeDragElement() {
-      document.onmouseup = null;
-      document.onmousemove = null;
-    }
-    
-    const toggleBtn = panel.querySelector('#toggleBtn');
-    const minimizeBtn = panel.querySelector('#minimizeBtn');
-    const statusText = panel.querySelector('#statusText');
-    const content = panel.querySelector('.wplace-content');
-    const statsArea = panel.querySelector('#statsArea');
-    
-    toggleBtn.addEventListener('click', () => {
-      state.running = !state.running;
+    // Actualizar información de health del backend
+    if (state.health) {
+      const backendEl = $('#wpa-backend-status');
+      const databaseEl = $('#wpa-database-status');
+      const uptimeEl = $('#wpa-uptime');
       
-      if (state.running) {
-        toggleBtn.innerHTML = `<i class="fas fa-stop"></i> <span>${t.stop}</span>`;
-        toggleBtn.classList.remove('wplace-btn-primary');
-        toggleBtn.classList.add('wplace-btn-stop');
-        updateUI(state.language === 'pt' ? '🚀 Pintura iniciada!' : '🚀 Painting started!', 'success');
-        paintLoop();
+      if (backendEl) {
+        if (state.health.status === 'online' && state.health.up) {
+          backendEl.textContent = '🟢 Online';
+          backendEl.style.color = cfg.THEME.success;
+        } else if (state.health.status === 'offline') {
+          backendEl.textContent = '🔴 Offline';
+          backendEl.style.color = cfg.THEME.error;
+        } else {
+          backendEl.textContent = '🟡 Error';
+          backendEl.style.color = '#ffaa00';
+        }
+      }
+      
+      if (databaseEl) {
+        databaseEl.textContent = state.health.database ? '🟢 OK' : '🔴 Error';
+        databaseEl.style.color = state.health.database ? cfg.THEME.success : cfg.THEME.error;
+      }
+      
+      if (uptimeEl) {
+        uptimeEl.textContent = state.health.uptime || '-';
+      }
+    }
+    
+    // Actualizar título del panel con el estado actual
+    const headerTitle = document.querySelector('.wpa-head div');
+    if (headerTitle && state.running) {
+      headerTitle.textContent = `WPlace Auto Paint [${state.painted} pixels]`;
+    } else if (headerTitle && !state.running) {
+      headerTitle.textContent = 'WPlace Auto Paint';
+    }
+    
+    // Actualizar estados de botones
+    updateButtonStates();
+    
+    // Mostrar información de cargas en el estado
+    const currentCharges = Math.floor(state.charges.count);
+    if (currentCharges < cfg.MIN_CHARGES && state.running && !state.inCooldown) {
+      const needed = cfg.MIN_CHARGES - currentCharges;
+      const timeToWait = Math.ceil((needed * cfg.CHARGE_REGEN_MS) / 1000);
+      setStatus(`⌛ Esperando cargas: ${currentCharges}/${cfg.MIN_CHARGES} (${timeToWait}s restantes)`, 'status');
+    }
+  }
+
+  // ---------- helpers UI ----------
+  function $(sel){ return document.querySelector(sel); }
+
+  function dragHeader(headerEl, panelEl){
+    let dragging=false, sx=0, sy=0, ox=0, oy=0;
+    headerEl.addEventListener('mousedown',(e)=>{
+      dragging=true; sx=e.clientX; sy=e.clientY; const r=panelEl.getBoundingClientRect(); ox=r.left; oy=r.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mouseup',()=> dragging=false);
+    document.addEventListener('mousemove',(e)=>{
+      if (!dragging) return;
+      const nx = ox + (e.clientX - sx);
+      const ny = oy + (e.clientY - sy);
+      panelEl.style.left = `${nx}px`;
+      panelEl.style.top  = `${ny}px`;
+      panelEl.style.right = 'auto';
+    });
+  }
+
+  // ---------- Exponer API por consola ----------
+  window.WPAUI = {
+    start(){ 
+      if (!state.running){ 
+        state.running=true; 
+        updateButtonStates();
+        setStatus('🚀 Empezando…'); 
+        loop(); 
+      }
+    },
+    stop(){ 
+      state.running=false; 
+      updateButtonStates();
+      setStatus('⏸️ Bot detenido'); 
+    },
+    once: paintOnce,
+    set(o={}){ Object.assign(cfg,o); saveCfg(); fillInputsFromCfg(); },
+    get: ()=>({ ...cfg }),
+    capture: enableCaptureOnce,
+    
+    // Nuevas funciones de utilidad
+    refreshCanvas: () => updateCanvasPixel(state.last?.x || 0, state.last?.y || 0, state.last?.color || 1),
+    verifyPixel: async (x, y) => {
+      try {
+        const tileX = Math.floor(x / cfg.TILE_SIZE) * cfg.TILE_SIZE;
+        const tileY = Math.floor(y / cfg.TILE_SIZE) * cfg.TILE_SIZE;
+        const response = await fetch(`https://backend.wplace.live/s0/tile/${tileX}/${tileY}`, {
+          credentials: 'include'
+        });
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`Pixel en (${x},${y}):`, data);
+          return data;
+        }
+      } catch (e) {
+        console.error('Error verificando pixel:', e);
+      }
+      return null;
+    },
+    
+    getStats: () => ({
+      painted: state.painted,
+      last: state.last,
+      charges: state.charges,
+      user: state.user,
+      running: state.running,
+      minCharges: cfg.MIN_CHARGES,
+      delay: cfg.DELAY_MS,
+      tileInfo: {
+        tileX: cfg.TILE_X,
+        tileY: cfg.TILE_Y,
+        tileSize: cfg.TILE_SIZE,
+        safeMargin: Math.floor(cfg.TILE_SIZE * 0.05),
+        safeArea: {
+          minX: cfg.TILE_X + Math.floor(cfg.TILE_SIZE * 0.05),
+          maxX: cfg.TILE_X + cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1,
+          minY: cfg.TILE_Y + Math.floor(cfg.TILE_SIZE * 0.05),
+          maxY: cfg.TILE_Y + cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1
+        }
+      }
+    }),
+    
+    // Funciones para gestión de cargas
+    setMinCharges: (min) => {
+      cfg.MIN_CHARGES = clamp(min, 1, 50);
+      saveCfg();
+      fillInputsFromCfg();
+      console.log(`Mínimo de cargas establecido a: ${cfg.MIN_CHARGES}`);
+    },
+    
+    setDelay: (seconds) => {
+      const delaySec = clamp(seconds, 5, 300);
+      cfg.DELAY_MS = delaySec * 1000;
+      saveCfg();
+      fillInputsFromCfg();
+      console.log(`Delay establecido a: ${delaySec} segundos`);
+    },
+    
+    // Función de diagnóstico
+    diagnose: () => {
+      const SAFE_MIN = 200;
+      const SAFE_MAX = 3800;
+      const isInSafeZone = cfg.TILE_X >= SAFE_MIN && cfg.TILE_Y >= SAFE_MIN && 
+                          cfg.TILE_X <= SAFE_MAX && cfg.TILE_Y <= SAFE_MAX;
+      
+      console.log('🔍 DIAGNÓSTICO DEL BOT:');
+      console.log('─'.repeat(50));
+      console.log(`Coordenadas actuales: (${cfg.TILE_X}, ${cfg.TILE_Y})`);
+      console.log(`Zona segura: ${SAFE_MIN} - ${SAFE_MAX}`);
+      console.log(`¿En zona segura?: ${isInSafeZone ? '✅ SÍ' : '❌ NO'}`);
+      console.log(`¿Necesita calibración?: ${needsCalibration() ? '⚠️ SÍ' : '✅ NO'}`);
+      console.log(`Estado del bot: ${state.running ? '🟢 Ejecutando' : '🔴 Detenido'}`);
+      console.log(`Modo captura: ${state.captureMode ? '🎯 Activo' : '🚫 Inactivo'}`);
+      console.log(`Cargas: ${state.charges.count}/${state.charges.max}`);
+      console.log(`Pixels pintados: ${state.painted}`);
+      if (state.last) {
+        console.log(`Último intento: ${state.last.status} @ (${state.last.x},${state.last.y}) color ${state.last.color}`);
+      }
+      
+      // Información de health del backend
+      if (state.health) {
+        console.log('🏥 ESTADO DEL BACKEND:');
+        console.log(`  Servidor: ${state.health.up ? '🟢 Online' : '🔴 Offline'}`);
+        console.log(`  Base de datos: ${state.health.database ? '🟢 OK' : '🔴 Error'}`);
+        console.log(`  Uptime: ${state.health.uptime}`);
+        if (state.health.lastCheck) {
+          const checkTime = new Date(state.health.lastCheck).toLocaleTimeString();
+          console.log(`  Última verificación: ${checkTime}`);
+        }
       } else {
-        toggleBtn.innerHTML = `<i class="fas fa-play"></i> <span>${t.start}</span>`;
-        toggleBtn.classList.add('wplace-btn-primary');
-        toggleBtn.classList.remove('wplace-btn-stop');
-        updateUI(state.language === 'pt' ? '⏸️ Pintura pausada' : '⏸️ Painting paused', 'default');
+        console.log('🏥 ESTADO DEL BACKEND: No verificado');
+      }
+      
+      console.log('─'.repeat(50));
+      
+      if (!isInSafeZone) {
+        console.log('🚨 ACCIÓN REQUERIDA: Las coordenadas están en zona peligrosa.');
+        console.log('   Ejecuta: WPAUI.resetConfig() y luego pinta un pixel manualmente en una zona segura.');
+      }
+      
+      return {
+        coordinates: { x: cfg.TILE_X, y: cfg.TILE_Y },
+        safeZone: { min: SAFE_MIN, max: SAFE_MAX },
+        isInSafeZone,
+        needsCalibration: needsCalibration(),
+        botRunning: state.running,
+        captureMode: state.captureMode,
+        charges: state.charges,
+        painted: state.painted,
+        lastAttempt: state.last,
+        backendHealth: state.health
+      };
+    },
+    
+    // Función para verificar health del backend manualmente
+    checkHealth: async () => {
+      console.log('🔄 Verificando estado del backend...');
+      const health = await checkBackendHealth();
+      updateStats();
+      if (health) {
+        console.log('✅ Backend funcionando correctamente:', health);
+      } else {
+        console.log('❌ Problemas detectados en el backend');
+      }
+      return state.health;
+    },
+    
+    // Función para resetear configuración
+    resetConfig: () => {
+      resetToSafeDefaults();
+      cfg = loadCfg();
+      fillInputsFromCfg();
+      setStatus('🔄 Configuración reseteada. Pinta un pixel manualmente para recalibrar.', 'error');
+      enableCaptureOnce();
+      console.log('✅ Configuración reseteada a valores seguros');
+    }
+  };
+
+  // ---------- Arranque ----------
+  cfg = loadCfg(); // Inicializar configuración ahora que loadCfg() está definida
+  log('Bot iniciado con configuración:', cfg);
+  log('¿Necesita calibración?', needsCalibration());
+  
+  // Verificar si las coordenadas actuales están en zona peligrosa
+  const SAFE_MIN = 200;
+  const SAFE_MAX = 3800;
+  if (cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX) {
+    log(`⚠️ COORDENADAS PELIGROSAS DETECTADAS: (${cfg.TILE_X},${cfg.TILE_Y}) - Forzando recalibración`);
+    resetToSafeDefaults();
+    cfg = loadCfg();
+  }
+  
+  createUI();
+  
+  // Verificar health del backend y obtener sesión al inicializar
+  Promise.all([checkBackendHealth(), getSession()]).then(() => {
+    updateStats();
+    
+    // Verificar si necesita calibración al cargar
+    if (needsCalibration()) {
+      setTimeout(() => {
+        setStatus('🎯 Calibración requerida: pinta un pixel en zona segura (200-3800, 200-3800)', 'error');
+        enableCaptureOnce(); // Activar captura automáticamente
+      }, 1000);
+    } else {
+      // Mostrar estado basado en health del backend
+      if (state.health?.up) {
+        setStatus(`✅ Bot listo para usar (Backend: ${state.health.uptime})`, 'success');
+      } else {
+        setStatus('⚠️ Bot listo, pero hay problemas con el backend', 'error');
+      }
+    }
+  }).catch(() => {
+    // Si falla la verificación inicial, continuar con la inicialización básica
+    getSession().then(() => {
+      updateStats();
+      if (needsCalibration()) {
+        setTimeout(() => {
+          setStatus('🎯 Calibración requerida: pinta un pixel en zona segura', 'error');
+          enableCaptureOnce();
+        }, 1000);
+      } else {
+        setStatus('⚠️ Bot listo, pero no se pudo verificar el backend', 'error');
       }
     });
-    
-    minimizeBtn.addEventListener('click', () => {
-      state.minimized = !state.minimized;
-      content.style.display = state.minimized ? 'none' : 'block';
-      minimizeBtn.innerHTML = `<i class="fas fa-${state.minimized ? 'expand' : 'minus'}"></i>`;
-    });
-    
-    window.addEventListener('beforeunload', () => {
-      state.menuOpen = false;
-    });
-  };
-
-  window.updateUI = (message, type = 'default') => {
-    const statusText = document.querySelector('#statusText');
-    if (statusText) {
-      statusText.textContent = message;
-      statusText.className = `wplace-status status-${type}`;
-      statusText.style.animation = 'none';
-      void statusText.offsetWidth;
-      statusText.style.animation = 'slideIn 0.3s ease-out';
-    }
-  };
-
-  window.updateStats = async () => {
-    await getCharge();
-    const statsArea = document.querySelector('#statsArea');
-    if (statsArea) {
-      const t = {
-        pt: {
-          user: "Usuário",
-          pixels: "Pixels",
-          charges: "Cargas",
-          level: "Level"
-        },
-        en: {
-          user: "User",
-          pixels: "Pixels",
-          charges: "Charges",
-          level: "Level"
-        }
-      }[state.language] || {
-        user: "User",
-        pixels: "Pixels",
-        charges: "Charges",
-        level: "Level"
-      };
-
-      statsArea.innerHTML = `
-        <div class="wplace-stat-item">
-          <div class="wplace-stat-label"><i class="fas fa-user"></i> ${t.user}</div>
-          <div>${state.userInfo.name}</div>
-        </div>
-        <div class="wplace-stat-item">
-          <div class="wplace-stat-label"><i class="fas fa-paint-brush"></i> ${t.pixels}</div>
-          <div>${state.paintedCount}</div>
-        </div>
-        <div class="wplace-stat-item">
-          <div class="wplace-stat-label"><i class="fas fa-bolt"></i> ${t.charges}</div>
-          <div>${Math.floor(state.charges.count)}/${Math.floor(state.charges.max)}</div>
-        </div>
-        <div class="wplace-stat-item">
-          <div class="wplace-stat-label"><i class="fas fa-star"></i> ${t.level}</div>
-          <div>${state.userInfo?.level || '0'}</div>
-        </div>
-      `;
-    }
-  };
-
-  await detectUserLocation();
-  createUI();
-  await getCharge();
-  updateStats();
+  });
 })();
