@@ -14,6 +14,7 @@
     DELAY_MS: 15000,         // 15 segundos entre pintadas (predeterminado)
     MIN_CHARGES: 10,         // mínimo de cargas para empezar a pintar
     CHARGE_REGEN_MS: 30000,  // 1 carga cada 30 segundos
+    PIXELS_PER_BATCH: 20,    // número de píxeles a pintar por lote
     COLOR_MIN: 1,
     COLOR_MAX: 32,
     COLOR_MODE: 'random',    // 'random' | 'fixed'
@@ -110,8 +111,8 @@
       state.user = me || null;
       const c = me?.charges || {};
       state.charges = {
-        count: Math.floor(c.count ?? 0),
-        max: Math.floor(c.max ?? 0),
+        count: c.count ?? 0,        // Mantener valor decimal original
+        max: c.max ?? 0,            // Mantener valor original (puede variar por usuario)
         cooldownMs: c.cooldownMs ?? 30000
       };
       return me;
@@ -213,6 +214,24 @@
     
     return [x, y];
   }
+
+  function generateMultipleCoords(count) {
+    const coords = [];
+    for (let i = 0; i < count; i++) {
+      const [x, y] = randomCoords();
+      coords.push(x, y); // El formato del API requiere x,y,x,y,x,y...
+    }
+    return coords;
+  }
+
+  function generateMultipleColors(count) {
+    const colors = [];
+    for (let i = 0; i < count; i++) {
+      colors.push(nextColor());
+    }
+    return colors;
+  }
+
   function nextColor() {
     if (cfg.COLOR_MODE === 'fixed') {
       return clamp(parseInt(cfg.COLOR_FIXED,10)||1, cfg.COLOR_MIN, cfg.COLOR_MAX);
@@ -300,8 +319,8 @@
     }
   }
 
-  async function postPixel(coords, color, t) {
-    const body = JSON.stringify({ colors: [color], coords, t });
+  async function postPixel(coords, colors, t) {
+    const body = JSON.stringify({ colors, coords, t });
     const res = await fetch(`https://backend.wplace.live/s0/pixel/${cfg.TILE_X}/${cfg.TILE_Y}`, {
       method: 'POST',
       credentials: 'include',
@@ -323,50 +342,85 @@
       return false;
     }
     
-    const coords = randomCoords();
-    const color  = nextColor();
-    const worldX = cfg.TILE_X + coords[0];
-    const worldY = cfg.TILE_Y + coords[1];
+    // Usar cargas actuales (ya consultadas en el loop)
+    const availableCharges = Math.floor(state.charges.count); // Cargas completas disponibles
     
-    // Verificación adicional de coordenadas finales
-    if (worldX < SAFE_MIN || worldY < SAFE_MIN || worldX > SAFE_MAX || worldY > SAFE_MAX) {
-      setStatus(`🚫 Coordenadas finales peligrosas (${worldX},${worldY}). Recalibrando...`, 'error');
-      log(`Coordenadas finales fuera de zona segura: (${worldX},${worldY})`);
+      // Si no hay cargas completas disponibles, no pintar
+      if (availableCharges < 1) {
+        setStatus(`🔋 Sin cargas disponibles. Esperando...`, 'error');
+        return false;
+      }    // Calcular el número óptimo de píxeles a pintar
+    // Usar el mínimo entre: cargas disponibles, configuración del usuario, y límite máximo (50)
+    const optimalPixelCount = Math.min(availableCharges, cfg.PIXELS_PER_BATCH, 50);
+    const pixelCount = Math.max(1, optimalPixelCount);
+    
+    // Informar si se ajustó el número de píxeles
+    if (pixelCount < cfg.PIXELS_PER_BATCH) {
+      log(`Ajustando píxeles por cargas completas disponibles: ${pixelCount}/${cfg.PIXELS_PER_BATCH} (${availableCharges} cargas completas de ${state.charges.count.toFixed(2)} totales)`);
+    }
+    
+    const coords = generateMultipleCoords(pixelCount);
+    const colors = generateMultipleColors(pixelCount);
+    
+    // Calcular coordenadas del mundo para el primer píxel (para mostrar)
+    const firstWorldX = cfg.TILE_X + coords[0];
+    const firstWorldY = cfg.TILE_Y + coords[1];
+    
+    // Verificación adicional de coordenadas finales del primer píxel
+    if (firstWorldX < SAFE_MIN || firstWorldY < SAFE_MIN || firstWorldX > SAFE_MAX || firstWorldY > SAFE_MAX) {
+      setStatus(`🚫 Coordenadas finales peligrosas (${firstWorldX},${firstWorldY}). Recalibrando...`, 'error');
+      log(`Coordenadas finales fuera de zona segura: (${firstWorldX},${firstWorldY})`);
       return false;
     }
     
-    setStatus(`🎨 Pintando pixel en (${worldX},${worldY}) color ${color}...`, 'status');
+    setStatus(`🎨 Pintando ${pixelCount} píxeles (${availableCharges} cargas completas) desde (${firstWorldX},${firstWorldY})...`, 'status');
     
     const t = await getTurnstileToken();
-    const r = await postPixel(coords, color, t);
+    const r = await postPixel(coords, colors, t);
 
-    state.last = { x: worldX, y: worldY, color, status: r.status, json: r.json };
+    state.last = { 
+      x: firstWorldX, 
+      y: firstWorldY, 
+      color: colors[0], 
+      pixelCount,
+      availableCharges,
+      status: r.status, 
+      json: r.json 
+    };
     
-    if (r.status === 200 && r.json && r.json.painted === 1) {
-      state.painted++;
+    if (r.status === 200 && r.json && (r.json.painted > 0 || r.json.painted === pixelCount)) {
+      const actualPainted = r.json.painted || pixelCount;
+      state.painted += actualPainted;
       state.retryCount = 0; // Resetear contador de reintentos al éxito
       
-      // Actualizar visualmente el canvas
-      await updateCanvasPixel(worldX, worldY, color);
+      // Actualizar visualmente el canvas para múltiples píxeles
+      for (let i = 0; i < coords.length; i += 2) {
+        const worldX = cfg.TILE_X + coords[i];
+        const worldY = cfg.TILE_Y + coords[i + 1];
+        const color = colors[Math.floor(i / 2)];
+        await updateCanvasPixel(worldX, worldY, color);
+      }
       
       // Refrescar el tile específico
       await refreshTile(cfg.TILE_X, cfg.TILE_Y);
       
-      // Actualizar la sesión para obtener las cargas actualizadas
+      // Actualizar la sesión para obtener las cargas actualizadas (única consulta tras pintar)
       await getSession();
       
-      setStatus(`✅ Pixel pintado exitosamente en (${worldX},${worldY}) con color ${color}`, 'success');
+      setStatus(`✅ Lote pintado: ${actualPainted}/${pixelCount} píxeles (${availableCharges} cargas usadas)`, 'success');
       flashEffect();
       
-      // Emitir evento personalizado para notificar que se pintó un pixel
-      const event = new CustomEvent('wplace-pixel-painted', {
+      // Emitir evento personalizado para notificar que se pintó un lote
+      const event = new CustomEvent('wplace-batch-painted', {
         detail: { 
-          x: worldX, 
-          y: worldY, 
-          color: color,
+          firstX: firstWorldX, 
+          firstY: firstWorldY, 
+          pixelCount: actualPainted,
+          totalPixels: pixelCount,
+          colors: colors,
+          coords: coords,
           tileX: cfg.TILE_X,
           tileY: cfg.TILE_Y,
-          coords: coords,
           timestamp: Date.now()
         }
       });
@@ -440,13 +494,22 @@
     }
 
     while (state.running) {
+      // Hacer UNA consulta a /me al inicio de cada ciclo
+      await getSession();
+      
       // Verificar si estamos en cooldown
       if (state.inCooldown) {
         const now = Date.now();
         if (now < state.cooldownEndTime) {
           const remainingMs = state.cooldownEndTime - now;
           const remainingSec = Math.ceil(remainingMs / 1000);
-          setStatus(`🚫 Cooldown activo: ${remainingSec}s restantes`, 'error');
+          const remainingMin = Math.floor(remainingSec / 60);
+          const remainingSecOnly = remainingSec % 60;
+          if (remainingMin > 0) {
+            setStatus(`🚫 Cooldown: ${remainingMin}m ${remainingSecOnly}s restantes`, 'error');
+          } else {
+            setStatus(`🚫 Cooldown: ${remainingSec}s restantes`, 'error');
+          }
           await sleep(1000);
           updateStats();
           continue;
@@ -458,25 +521,55 @@
         }
       }
 
-      const { count, cooldownMs } = state.charges;
+      const { count } = state.charges;
       
-      // Verificar si tenemos suficientes cargas para empezar
+      // Verificar si tenemos al menos las cargas mínimas para pintar
       if (count < cfg.MIN_CHARGES) {
-        const chargesNeeded = cfg.MIN_CHARGES - count;
-        const waitTimeMs = chargesNeeded * cfg.CHARGE_REGEN_MS;
+        const waitTimeMs = cfg.MIN_CHARGES * 30 * 1000; // MIN_CHARGES × 30 segundos
         const waitTimeSec = Math.ceil(waitTimeMs / 1000);
         
-        setStatus(`⌛ Esperando ${cfg.MIN_CHARGES} cargas (faltan ${chargesNeeded}). Tiempo estimado: ${waitTimeSec}s`, 'status');
+        // Activar cooldown específico para cargas insuficientes
+        if (!state.inCooldown) {
+          state.inCooldown = true;
+          state.cooldownEndTime = Date.now() + waitTimeMs;
+          setStatus(`🔋 Cargas insuficientes (${Math.floor(count)}/${cfg.MIN_CHARGES}). Cooldown: ${Math.ceil(waitTimeSec/60)}min`, 'error');
+        }
         
-        // Esperar el tiempo de regeneración o el cooldown, lo que sea mayor
-        const actualWaitTime = Math.max(waitTimeMs, cooldownMs);
-        await sleep(actualWaitTime);
-        await getSession();
-        updateStats();
-        continue;
+        const now = Date.now();
+        if (now < state.cooldownEndTime) {
+          const remainingMs = state.cooldownEndTime - now;
+          const remainingSec = Math.ceil(remainingMs / 1000);
+          const remainingMin = Math.floor(remainingSec / 60);
+          const remainingSecOnly = remainingSec % 60;
+          if (remainingMin > 0) {
+            setStatus(`⏳ Cooldown: ${remainingMin}m ${remainingSecOnly}s (esperando ${cfg.MIN_CHARGES} cargas)`, 'status');
+          } else {
+            setStatus(`⏳ Cooldown: ${remainingSec}s (esperando ${cfg.MIN_CHARGES} cargas)`, 'status');
+          }
+          await sleep(1000);
+          updateStats();
+          continue;
+        } else {
+          // Cooldown terminado, verificar si ya tenemos suficientes cargas
+          state.inCooldown = false;
+          state.cooldownEndTime = 0;
+          // NO hacer consulta adicional aquí - la próxima iteración del loop la hará
+          if (state.charges.count >= cfg.MIN_CHARGES) {
+            setStatus('✅ Cargas suficientes alcanzadas. Continuando...', 'success');
+            updateStats();
+            continue;
+          } else {
+            // Aún no hay suficientes cargas, renovar cooldown
+            state.inCooldown = true;
+            state.cooldownEndTime = Date.now() + waitTimeMs;
+            setStatus(`🔋 Aún sin cargas suficientes. Renovando cooldown: ${Math.ceil(waitTimeSec/60)}min`, 'error');
+            updateStats();
+            continue;
+          }
+        }
       }
       
-      // Si tenemos suficientes cargas, pintar
+      // Si tenemos cargas disponibles, pintar
       state.nextPaintTime = Date.now() + cfg.DELAY_MS;
       const paintSuccess = await paintWithRetry();
       updateStats();
@@ -655,9 +748,9 @@
       </div>
       <div class="wpa-body">
         <div class="wpa-grid">
-          <div><label>Tamaño</label><input id="wpa-size" class="wpa-input" type="number" /></div>
           <div><label>Delay (seg)</label><input id="wpa-delay" class="wpa-input" type="number" min="5" max="300" /></div>
           <div><label>Min. Cargas</label><input id="wpa-mincharges" class="wpa-input" type="number" min="1" max="50" /></div>
+          <div><label>Píxeles/Lote</label><input id="wpa-pixelsbatch" class="wpa-input" type="number" min="1" max="50" /></div>
           <div><label>Sitekey</label><input id="wpa-sitekey" class="wpa-input" type="text" /></div>
           <div>
             <label>Color</label>
@@ -682,6 +775,7 @@
           <div class="wpa-stat"><span>Último</span><span id="wpa-last">-</span></div>
           <div class="wpa-stat"><span>Estado</span><span id="wpa-running">🔴 Detenido</span></div>
           <div class="wpa-stat" id="wpa-retry-info" style="display:none"><span>Reintentos</span><span id="wpa-retries">0/3</span></div>
+          <div class="wpa-stat" id="wpa-cooldown-info" style="display:none"><span>Cooldown</span><span id="wpa-cooldown">-</span></div>
         </div>
 
         <div class="wpa-card" id="wpa-health">
@@ -698,17 +792,16 @@
 
     // Inputs
     const el = {
-      size: $('#wpa-size'), delay: $('#wpa-delay'),
-      mincharges: $('#wpa-mincharges'), sitekey: $('#wpa-sitekey'), cmode: $('#wpa-cmode'), cfixed: $('#wpa-cfixed'),
+      delay: $('#wpa-delay'),
+      mincharges: $('#wpa-mincharges'), pixelsbatch: $('#wpa-pixelsbatch'), sitekey: $('#wpa-sitekey'), cmode: $('#wpa-cmode'), cfixed: $('#wpa-cfixed'),
       start: $('#wpa-start'), once: $('#wpa-once'), stop: $('#wpa-stop'),
       status: $('#wpa-status'), user: $('#wpa-user'), charges: $('#wpa-charges'),
       painted: $('#wpa-painted'), last: $('#wpa-last'), running: $('#wpa-running'), 
-      retries: $('#wpa-retries'), retryInfo: $('#wpa-retry-info'),
+      retries: $('#wpa-retries'), retryInfo: $('#wpa-retry-info'), cooldown: $('#wpa-cooldown'), cooldownInfo: $('#wpa-cooldown-info'),
       effect: $('#wpa-effect')
     };
 
     function bindInputs() {
-      el.size.addEventListener('change', () => { cfg.TILE_SIZE = clamp(parseInt(el.size.value,10)||cfg.TILE_SIZE, 1, 1000); saveCfg(); });
       el.delay.addEventListener('change', () => { 
         const delaySec = clamp(parseInt(el.delay.value,10)||15, 5, 300);
         cfg.DELAY_MS = delaySec * 1000; // Convertir segundos a milisegundos
@@ -716,6 +809,11 @@
         saveCfg(); 
       });
       el.mincharges.addEventListener('change', () => { cfg.MIN_CHARGES = clamp(parseInt(el.mincharges.value,10)||cfg.MIN_CHARGES, 1, 50); saveCfg(); });
+      el.pixelsbatch.addEventListener('change', () => { 
+        cfg.PIXELS_PER_BATCH = clamp(parseInt(el.pixelsbatch.value,10)||cfg.PIXELS_PER_BATCH, 1, 50); 
+        el.pixelsbatch.value = cfg.PIXELS_PER_BATCH; // Asegurar que el input muestre el valor clampado
+        saveCfg(); 
+      });
       el.sitekey.addEventListener('change', () => { cfg.SITEKEY = el.sitekey.value.trim() || cfg.SITEKEY; saveCfg(); });
       el.cmode.addEventListener('change', () => { 
         cfg.COLOR_MODE = el.cmode.value; 
@@ -758,7 +856,10 @@
           enableCaptureOnce();
           return;
         }
-        setStatus('⏳ Intentando…','status'); 
+        setStatus('⏳ Consultando cargas y pintando…','status');
+        
+        // Hacer consulta manual solo para el botón "Once"
+        await getSession();
         await paintWithRetry(); 
         updateStats(); 
       };
@@ -773,9 +874,9 @@
   }
 
   function fillInputsFromCfg() {
-    $('#wpa-size').value = cfg.TILE_SIZE;
     $('#wpa-delay').value = Math.floor(cfg.DELAY_MS / 1000); // Mostrar en segundos
     $('#wpa-mincharges').value = cfg.MIN_CHARGES;
+    $('#wpa-pixelsbatch').value = cfg.PIXELS_PER_BATCH;
     $('#wpa-sitekey').value = cfg.SITEKEY;
     $('#wpa-cmode').value = cfg.COLOR_MODE;
     $('#wpa-cfixed').value = cfg.COLOR_FIXED;
@@ -811,9 +912,36 @@
   }
 
   async function updateStats() {
-    await getSession();
+    // NO hacer consulta automática a /me - usar datos existentes
     $('#wpa-user').textContent = state.user?.name || '-';
-    $('#wpa-charges').textContent = `${Math.floor(state.charges.count)}/${Math.floor(state.charges.max)}`;
+    
+    // Mostrar solo cargas completas disponibles (sin máximo)
+    const completeCharges = Math.floor(state.charges.count);
+    const chargeDisplay = `${completeCharges}`;
+    $('#wpa-charges').textContent = chargeDisplay;
+    
+    // Mostrar información de cooldown si está activo
+    const cooldownEl = $('#wpa-cooldown');
+    const cooldownInfo = $('#wpa-cooldown-info');
+    if (state.inCooldown && cooldownEl && cooldownInfo) {
+      const remainingMs = state.cooldownEndTime - Date.now();
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      if (remainingSec > 0) {
+        const remainingMin = Math.floor(remainingSec / 60);
+        const remainingSecOnly = remainingSec % 60;
+        if (remainingMin > 0) {
+          cooldownEl.textContent = `${remainingMin}m ${remainingSecOnly}s`;
+        } else {
+          cooldownEl.textContent = `${remainingSec}s`;
+        }
+        cooldownInfo.style.display = 'flex';
+      } else {
+        cooldownInfo.style.display = 'none';
+      }
+    } else if (cooldownInfo) {
+      cooldownInfo.style.display = 'none';
+    }
+    
     $('#wpa-painted').textContent = String(state.painted);
     
     // Mostrar información de reintentos solo si hay reintentos activos
@@ -827,11 +955,13 @@
     if (state.last) {
       const j = state.last;
       const statusIcon = j.status === 200 ? '✅' : j.status === 403 ? '⚠️' : '❌';
-      $('#wpa-last').textContent = `${statusIcon} ${j.status} @ (${j.x},${j.y}) c${j.color}`;
+      const pixelInfo = j.pixelCount > 1 ? ` (${j.pixelCount} píxeles)` : '';
+      const chargeInfo = j.availableCharges ? ` [${j.availableCharges} cargas]` : '';
+      $('#wpa-last').textContent = `${statusIcon} ${j.status} @ (${j.x},${j.y}) c${j.color}${pixelInfo}${chargeInfo}`;
       
       // Agregar información adicional si hay JSON de respuesta
       if (j.json) {
-        const additionalInfo = j.json.painted === 1 ? ' ✓' : 
+        const additionalInfo = j.json.painted > 0 ? ` ✓${j.json.painted}` : 
                               j.json.message ? ` (${j.json.message})` : '';
         $('#wpa-last').textContent += additionalInfo;
       }
@@ -877,12 +1007,19 @@
     // Actualizar estados de botones
     updateButtonStates();
     
-    // Mostrar información de cargas en el estado
-    const currentCharges = Math.floor(state.charges.count);
-    if (currentCharges < cfg.MIN_CHARGES && state.running && !state.inCooldown) {
-      const needed = cfg.MIN_CHARGES - currentCharges;
-      const timeToWait = Math.ceil((needed * cfg.CHARGE_REGEN_MS) / 1000);
-      setStatus(`⌛ Esperando cargas: ${currentCharges}/${cfg.MIN_CHARGES} (${timeToWait}s restantes)`, 'status');
+    // Mostrar información específica según el estado (sin referencias a tiempos de carga)
+    if (state.inCooldown && state.running) {
+      const remainingMs = state.cooldownEndTime - Date.now();
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      const remainingMin = Math.floor(remainingSec / 60);
+      const remainingSecOnly = remainingSec % 60;
+      if (remainingMin > 0) {
+        setStatus(`⏳ Cooldown: ${remainingMin}m ${remainingSecOnly}s (esperando ${cfg.MIN_CHARGES} cargas)`, 'status');
+      } else {
+        setStatus(`⏳ Cooldown: ${remainingSec}s (esperando ${cfg.MIN_CHARGES} cargas)`, 'status');
+      }
+    } else if (completeCharges < cfg.MIN_CHARGES && state.running && !state.inCooldown) {
+      setStatus(`⚡ Cargas insuficientes: ${completeCharges}/${cfg.MIN_CHARGES} (iniciando cooldown...)`, 'status');
     }
   }
 
@@ -968,6 +1105,14 @@
       }
     }),
     
+    // Función para establecer píxeles por lote
+    setPixelsPerBatch: (count) => {
+      cfg.PIXELS_PER_BATCH = clamp(count, 1, 50);
+      saveCfg();
+      fillInputsFromCfg();
+      console.log(`Píxeles por lote establecido a: ${cfg.PIXELS_PER_BATCH}`);
+    },
+    
     // Funciones para gestión de cargas
     setMinCharges: (min) => {
       cfg.MIN_CHARGES = clamp(min, 1, 50);
@@ -999,10 +1144,13 @@
       console.log(`¿Necesita calibración?: ${needsCalibration() ? '⚠️ SÍ' : '✅ NO'}`);
       console.log(`Estado del bot: ${state.running ? '🟢 Ejecutando' : '🔴 Detenido'}`);
       console.log(`Modo captura: ${state.captureMode ? '🎯 Activo' : '🚫 Inactivo'}`);
-      console.log(`Cargas: ${state.charges.count}/${state.charges.max}`);
+      console.log(`Cargas disponibles: ${Math.floor(state.charges.count)}`);
+      console.log(`Píxeles por lote: ${cfg.PIXELS_PER_BATCH} (ajustable según cargas completas)`);
       console.log(`Pixels pintados: ${state.painted}`);
       if (state.last) {
-        console.log(`Último intento: ${state.last.status} @ (${state.last.x},${state.last.y}) color ${state.last.color}`);
+        const pixelInfo = state.last.pixelCount > 1 ? ` (lote de ${state.last.pixelCount})` : '';
+        const chargeInfo = state.last.availableCharges ? ` con ${state.last.availableCharges} cargas completas` : '';
+        console.log(`Último intento: ${state.last.status} @ (${state.last.x},${state.last.y}) color ${state.last.color}${pixelInfo}${chargeInfo}`);
       }
       
       // Información de health del backend
