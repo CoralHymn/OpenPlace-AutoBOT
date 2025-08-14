@@ -10,7 +10,7 @@
     SITEKEY: '0x4AAAAAABpqJe8FO0N84q0F', // Turnstile sitekey (ajústalo si cambia)
     TILE_X: 1086,
     TILE_Y: 1565,
-    TILE_SIZE: 100,          // normalmente 100x100
+    TILE_SIZE: 3000,         // Tiles son de ~3000x3000 según investigación
     DELAY_MS: 15000,         // 15 segundos entre pintadas (predeterminado)
     MIN_CHARGES: 10,         // mínimo de cargas para empezar a pintar
     CHARGE_REGEN_MS: 30000,  // 1 carga cada 30 segundos
@@ -60,12 +60,9 @@
       if (s) {
         const loaded = { ...DEFAULTS, ...JSON.parse(s) };
         
-        // Validar coordenadas cargadas
-        const SAFE_MIN = 200;
-        const SAFE_MAX = 3800;
-        if (loaded.TILE_X < SAFE_MIN || loaded.TILE_Y < SAFE_MIN || 
-            loaded.TILE_X > SAFE_MAX || loaded.TILE_Y > SAFE_MAX) {
-          log(`Configuración corrupta detectada: coordenadas (${loaded.TILE_X},${loaded.TILE_Y}) fuera de zona segura`);
+        // Validar coordenadas cargadas (verificar que sean números válidos)
+        if (!Number.isFinite(loaded.TILE_X) || !Number.isFinite(loaded.TILE_Y)) {
+          log(`Configuración corrupta detectada: coordenadas (${loaded.TILE_X},${loaded.TILE_Y}) inválidas`);
           resetToSafeDefaults();
           return { ...DEFAULTS };
         }
@@ -91,15 +88,11 @@
     const hasDefaultCoords = cfg.TILE_X === DEFAULTS.TILE_X && cfg.TILE_Y === DEFAULTS.TILE_Y;
     // También verificar si no hay configuración guardada
     const hasNoSavedConfig = !localStorage.getItem('WPA_UI_CFG');
-    // Verificar si las coordenadas están en rango válido (considerando el canvas 4000x4000)
-    // Evitar 5% del inicio (200 pixels) y 5% del final (200 pixels)
-    const SAFE_MIN = 200; // 5% de 4000
-    const SAFE_MAX = 3800; // 95% de 4000
-    const isInDangerZone = cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || 
-                          cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX;
+    // Verificar que las coordenadas sean números válidos
+    const hasInvalidCoords = !Number.isFinite(cfg.TILE_X) || !Number.isFinite(cfg.TILE_Y);
     
-    const needsCalib = hasDefaultCoords || hasNoSavedConfig || isInDangerZone;
-    log(`Verificación calibración: defaults=${hasDefaultCoords}, noConfig=${hasNoSavedConfig}, danger=${isInDangerZone}, coords=(${cfg.TILE_X},${cfg.TILE_Y})`);
+    const needsCalib = hasDefaultCoords || hasNoSavedConfig || hasInvalidCoords;
+    log(`Verificación calibración: defaults=${hasDefaultCoords}, noConfig=${hasNoSavedConfig}, invalid=${hasInvalidCoords}, coords=(${cfg.TILE_X},${cfg.TILE_Y})`);
     
     return needsCalib;
   }
@@ -193,26 +186,26 @@
 
   // ---------- API backend ----------
   function randomCoords() {
-    // Aplicar márgenes de seguridad del 5% en cada lado para evitar errores en los bordes
-    const margin = Math.floor(cfg.TILE_SIZE * 0.05); // 5% del tamaño del tile
+    // Generar coordenadas locales directamente dentro del tile (0 a TILE_SIZE-1)
+    const margin = Math.floor(cfg.TILE_SIZE * 0.05); // 5% del tamaño del tile como margen
     const safeSize = cfg.TILE_SIZE - (margin * 2); // Área segura descontando márgenes
     
     // Validar que el área segura sea válida
     if (safeSize <= 0) {
       log('Error: área segura inválida, usando coordenadas básicas');
-      return [randInt(cfg.TILE_SIZE), randInt(cfg.TILE_SIZE)];
+      return [Math.floor(Math.random() * cfg.TILE_SIZE), Math.floor(Math.random() * cfg.TILE_SIZE)];
     }
     
-    // Generar coordenadas dentro del área segura
-    const x = margin + randInt(safeSize);
-    const y = margin + randInt(safeSize);
+    // Generar coordenadas locales dentro del área segura del tile
+    const localX = margin + Math.floor(Math.random() * safeSize);
+    const localY = margin + Math.floor(Math.random() * safeSize);
     
     // Log para debugging (solo ocasionalmente)
     if (Math.random() < 0.1) { // 10% de las veces
-      log(`Coordenadas generadas: (${x},${y}) en área segura [${margin}-${margin + safeSize - 1}]`);
+      log(`Coordenadas locales generadas: (${localX},${localY}) en área segura [${margin}-${margin + safeSize - 1}]`);
     }
     
-    return [x, y];
+    return [localX, localY];
   }
 
   function generateMultipleCoords(count) {
@@ -241,7 +234,7 @@
   }
 
   // Función para actualizar el canvas visualmente
-  async function updateCanvasPixel(worldX, worldY, color) {
+  async function updateCanvasPixel(localX, localY, color) {
     try {
       // Buscar elementos del canvas que puedan necesitar actualización
       const canvasElements = document.querySelectorAll('canvas');
@@ -252,7 +245,7 @@
           if (ctx) {
             // Emitir eventos para que el canvas se actualice
             const event = new CustomEvent('pixel-painted', {
-              detail: { x: worldX, y: worldY, color }
+              detail: { x: localX, y: localY, color, tileX: cfg.TILE_X, tileY: cfg.TILE_Y }
             });
             canvas.dispatchEvent(event);
           }
@@ -277,7 +270,7 @@
       const coordElements = document.querySelectorAll('[class*="tile"], [class*="canvas"], [id*="canvas"]');
       coordElements.forEach(el => {
         try {
-          if (el.getAttribute && (el.getAttribute('data-x') == worldX || el.getAttribute('data-y') == worldY)) {
+          if (el.getAttribute && (el.getAttribute('data-x') == localX || el.getAttribute('data-y') == localY)) {
             el.style.filter = 'brightness(1.2)';
             setTimeout(() => { el.style.filter = ''; }, 200);
           }
@@ -332,13 +325,10 @@
   }
 
   async function paintOnce() {
-    // Verificar que las coordenadas del tile sean seguras antes de pintar
-    const SAFE_MIN = 200; // 5% de 4000
-    const SAFE_MAX = 3800; // 95% de 4000
-    
-    if (cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX) {
-      setStatus(`🚫 Coordenadas peligrosas (${cfg.TILE_X},${cfg.TILE_Y}). Calibra en zona segura (${SAFE_MIN}-${SAFE_MAX})`, 'error');
-      log(`Pintado cancelado: coordenadas (${cfg.TILE_X},${cfg.TILE_Y}) están fuera de zona segura`);
+    // Verificar que las coordenadas del tile sean válidas antes de pintar
+    if (!Number.isFinite(cfg.TILE_X) || !Number.isFinite(cfg.TILE_Y)) {
+      setStatus(`🚫 Coordenadas del tile inválidas (${cfg.TILE_X},${cfg.TILE_Y}). Calibra primero`, 'error');
+      log(`Pintado cancelado: coordenadas del tile inválidas`);
       return false;
     }
     
@@ -362,25 +352,18 @@
     const coords = generateMultipleCoords(pixelCount);
     const colors = generateMultipleColors(pixelCount);
     
-    // Calcular coordenadas del mundo para el primer píxel (para mostrar)
-    const firstWorldX = cfg.TILE_X + coords[0];
-    const firstWorldY = cfg.TILE_Y + coords[1];
+    // Las coordenadas generadas ya son locales al tile, no necesitamos cálculos adicionales
+    const firstLocalX = coords[0];
+    const firstLocalY = coords[1];
     
-    // Verificación adicional de coordenadas finales del primer píxel
-    if (firstWorldX < SAFE_MIN || firstWorldY < SAFE_MIN || firstWorldX > SAFE_MAX || firstWorldY > SAFE_MAX) {
-      setStatus(`🚫 Coordenadas finales peligrosas (${firstWorldX},${firstWorldY}). Recalibrando...`, 'error');
-      log(`Coordenadas finales fuera de zona segura: (${firstWorldX},${firstWorldY})`);
-      return false;
-    }
-    
-    setStatus(`🎨 Pintando ${pixelCount} píxeles (${availableCharges} cargas completas) desde (${firstWorldX},${firstWorldY})...`, 'status');
+    setStatus(`🎨 Pintando ${pixelCount} píxeles (${availableCharges} cargas completas) en tile(${cfg.TILE_X},${cfg.TILE_Y}) local(${firstLocalX},${firstLocalY})...`, 'status');
     
     const t = await getTurnstileToken();
     const r = await postPixel(coords, colors, t);
 
     state.last = { 
-      x: firstWorldX, 
-      y: firstWorldY, 
+      x: firstLocalX, 
+      y: firstLocalY, 
       color: colors[0], 
       pixelCount,
       availableCharges,
@@ -395,10 +378,11 @@
       
       // Actualizar visualmente el canvas para múltiples píxeles
       for (let i = 0; i < coords.length; i += 2) {
-        const worldX = cfg.TILE_X + coords[i];
-        const worldY = cfg.TILE_Y + coords[i + 1];
+        const localX = coords[i];
+        const localY = coords[i + 1];
         const color = colors[Math.floor(i / 2)];
-        await updateCanvasPixel(worldX, worldY, color);
+        // Las coordenadas ya son locales al tile
+        await updateCanvasPixel(localX, localY, color);
       }
       
       // Refrescar el tile específico
@@ -413,8 +397,8 @@
       // Emitir evento personalizado para notificar que se pintó un lote
       const event = new CustomEvent('wplace-batch-painted', {
         detail: { 
-          firstX: firstWorldX, 
-          firstY: firstWorldY, 
+          firstX: firstLocalX, 
+          firstY: firstLocalY, 
           pixelCount: actualPainted,
           totalPixels: pixelCount,
           colors: colors,
@@ -617,28 +601,18 @@
             const parts = (u.pathname || '').split('/').filter(Boolean); // ["s0","pixel","1086","1565"]
             const px = parseInt(parts[2],10), py = parseInt(parts[3],10);
             if (Number.isFinite(px) && Number.isFinite(py)) {
-              // Validar que las coordenadas estén en zona segura
-              const SAFE_MIN = 200; // 5% de 4000
-              const SAFE_MAX = 3800; // 95% de 4000
-              
-              if (px < SAFE_MIN || py < SAFE_MIN || px > SAFE_MAX || py > SAFE_MAX) {
-                setStatus(`⚠️ Coordenadas peligrosas: (${px},${py}). Pinta en una zona más central (entre ${SAFE_MIN}-${SAFE_MAX})`, 'error');
-                log(`Coordenadas rechazadas por estar en zona peligrosa: (${px},${py})`);
-                return state.originalFetch.apply(this, arguments);
-              }
-              
               cfg.TILE_X = px; cfg.TILE_Y = py; saveCfg();
               fillInputsFromCfg();
               
-              // Calcular información del área segura
+              // Calcular información del área segura dentro del tile
               const margin = Math.floor(cfg.TILE_SIZE * 0.05);
-              const safeMinX = px + margin;
-              const safeMaxX = px + cfg.TILE_SIZE - margin - 1;
-              const safeMinY = py + margin;
-              const safeMaxY = py + cfg.TILE_SIZE - margin - 1;
+              const safeMinX = margin;
+              const safeMaxX = cfg.TILE_SIZE - margin - 1;
+              const safeMinY = margin;
+              const safeMaxY = cfg.TILE_SIZE - margin - 1;
               
-              setStatus(`✅ Coordenadas capturadas: ${px}/${py} (área segura: ${safeMinX}-${safeMaxX}, ${safeMinY}-${safeMaxY})`, 'success');
-              log(`Tile capturado: ${px}/${py}, área segura: (${safeMinX},${safeMinY}) a (${safeMaxX},${safeMaxY})`);
+              setStatus(`✅ Tile capturado: (${px},${py}) área local segura: (${safeMinX}-${safeMaxX}, ${safeMinY}-${safeMaxY})`, 'success');
+              log(`Tile capturado: (${px},${py}), área local segura: (${safeMinX},${safeMinY}) a (${safeMaxX},${safeMaxY})`);
             }
           } catch {}
           // desactiva sniffer tras la primera coincidencia
@@ -1097,10 +1071,10 @@
         tileSize: cfg.TILE_SIZE,
         safeMargin: Math.floor(cfg.TILE_SIZE * 0.05),
         safeArea: {
-          minX: cfg.TILE_X + Math.floor(cfg.TILE_SIZE * 0.05),
-          maxX: cfg.TILE_X + cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1,
-          minY: cfg.TILE_Y + Math.floor(cfg.TILE_SIZE * 0.05),
-          maxY: cfg.TILE_Y + cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1
+          minX: Math.floor(cfg.TILE_SIZE * 0.05),
+          maxX: cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1,
+          minY: Math.floor(cfg.TILE_SIZE * 0.05),
+          maxY: cfg.TILE_SIZE - Math.floor(cfg.TILE_SIZE * 0.05) - 1
         }
       }
     }),
@@ -1131,16 +1105,13 @@
     
     // Función de diagnóstico
     diagnose: () => {
-      const SAFE_MIN = 200;
-      const SAFE_MAX = 3800;
-      const isInSafeZone = cfg.TILE_X >= SAFE_MIN && cfg.TILE_Y >= SAFE_MIN && 
-                          cfg.TILE_X <= SAFE_MAX && cfg.TILE_Y <= SAFE_MAX;
+      const isValidTile = Number.isFinite(cfg.TILE_X) && Number.isFinite(cfg.TILE_Y);
       
       console.log('🔍 DIAGNÓSTICO DEL BOT:');
       console.log('─'.repeat(50));
-      console.log(`Coordenadas actuales: (${cfg.TILE_X}, ${cfg.TILE_Y})`);
-      console.log(`Zona segura: ${SAFE_MIN} - ${SAFE_MAX}`);
-      console.log(`¿En zona segura?: ${isInSafeZone ? '✅ SÍ' : '❌ NO'}`);
+      console.log(`Coordenadas del tile: (${cfg.TILE_X}, ${cfg.TILE_Y})`);
+      console.log(`Tamaño del tile: ${cfg.TILE_SIZE}x${cfg.TILE_SIZE}`);
+      console.log(`¿Tile válido?: ${isValidTile ? '✅ SÍ' : '❌ NO'}`);
       console.log(`¿Necesita calibración?: ${needsCalibration() ? '⚠️ SÍ' : '✅ NO'}`);
       console.log(`Estado del bot: ${state.running ? '🟢 Ejecutando' : '🔴 Detenido'}`);
       console.log(`Modo captura: ${state.captureMode ? '🎯 Activo' : '🚫 Inactivo'}`);
@@ -1150,7 +1121,7 @@
       if (state.last) {
         const pixelInfo = state.last.pixelCount > 1 ? ` (lote de ${state.last.pixelCount})` : '';
         const chargeInfo = state.last.availableCharges ? ` con ${state.last.availableCharges} cargas completas` : '';
-        console.log(`Último intento: ${state.last.status} @ (${state.last.x},${state.last.y}) color ${state.last.color}${pixelInfo}${chargeInfo}`);
+        console.log(`Último intento: ${state.last.status} @ tile(${cfg.TILE_X},${cfg.TILE_Y}) local(${state.last.x},${state.last.y}) color ${state.last.color}${pixelInfo}${chargeInfo}`);
       }
       
       // Información de health del backend
@@ -1169,15 +1140,15 @@
       
       console.log('─'.repeat(50));
       
-      if (!isInSafeZone) {
-        console.log('🚨 ACCIÓN REQUERIDA: Las coordenadas están en zona peligrosa.');
-        console.log('   Ejecuta: WPAUI.resetConfig() y luego pinta un pixel manualmente en una zona segura.');
+      if (!isValidTile) {
+        console.log('🚨 ACCIÓN REQUERIDA: Las coordenadas del tile no son válidas.');
+        console.log('   Ejecuta: WPAUI.resetConfig() y luego pinta un pixel manualmente para calibrar.');
       }
       
       return {
-        coordinates: { x: cfg.TILE_X, y: cfg.TILE_Y },
-        safeZone: { min: SAFE_MIN, max: SAFE_MAX },
-        isInSafeZone,
+        tileCoordinates: { x: cfg.TILE_X, y: cfg.TILE_Y },
+        tileSize: cfg.TILE_SIZE,
+        isValidTile,
         needsCalibration: needsCalibration(),
         botRunning: state.running,
         captureMode: state.captureMode,
@@ -1217,14 +1188,8 @@
   log('Bot iniciado con configuración:', cfg);
   log('¿Necesita calibración?', needsCalibration());
   
-  // Verificar si las coordenadas actuales están en zona peligrosa
-  const SAFE_MIN = 200;
-  const SAFE_MAX = 3800;
-  if (cfg.TILE_X < SAFE_MIN || cfg.TILE_Y < SAFE_MIN || cfg.TILE_X > SAFE_MAX || cfg.TILE_Y > SAFE_MAX) {
-    log(`⚠️ COORDENADAS PELIGROSAS DETECTADAS: (${cfg.TILE_X},${cfg.TILE_Y}) - Forzando recalibración`);
-    resetToSafeDefaults();
-    cfg = loadCfg();
-  }
+  // Usar sistema de tiles - ya no hay zonas "peligrosas" globales
+  // Las coordenadas ahora son locales dentro de cada tile (0-2999)
   
   createUI();
   
@@ -1235,7 +1200,7 @@
     // Verificar si necesita calibración al cargar
     if (needsCalibration()) {
       setTimeout(() => {
-        setStatus('🎯 Calibración requerida: pinta un pixel en zona segura (200-3800, 200-3800)', 'error');
+        setStatus('🎯 Calibración requerida: pinta un pixel para detectar tile actual', 'error');
         enableCaptureOnce(); // Activar captura automáticamente
       }, 1000);
     } else {
@@ -1252,7 +1217,7 @@
       updateStats();
       if (needsCalibration()) {
         setTimeout(() => {
-          setStatus('🎯 Calibración requerida: pinta un pixel en zona segura', 'error');
+          setStatus('🎯 Calibración requerida: pinta un pixel para detectar tile actual', 'error');
           enableCaptureOnce();
         }, 1000);
       } else {
