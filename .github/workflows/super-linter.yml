@@ -10,7 +10,7 @@ jobs:
       contents: read
       statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Lint code base
         uses: super-linter/super-linter@v6
         env:
