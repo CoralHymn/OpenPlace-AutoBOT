@@ -1,3 +1,21 @@
+<!-- Badges centrados -->
+<p align="center">
+  <a href="https://hits.seeyoufarm.com">
+    <img src="https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FAlarisco%2FWPlace-AutoBOTV2&count_bg=%23007EC6&title_bg=%23555555&icon=github.svg&icon_color=%23FFFFFF&title=Visitas&edge_flat=false"
+         alt="Visitas"/>
+  </a>
+  <img src="https://img.shields.io/github/stars/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
+       alt="GitHub Stars" />
+  <img src="https://img.shields.io/github/forks/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
+       alt="GitHub Forks" />
+  <img src="https://img.shields.io/github/issues/Alarisco/WPlace-AutoBOTV2?style=for-the-badge"
+       alt="GitHub Issues" />
+  <img src="https://img.shields.io/github/last-commit/Alarisco/WPlace-AutoBOTV2?style=for-the-badge"
+       alt="Último commit" />
+  <img src="https://img.shields.io/badge/Licence-MIT-green?style=for-the-badge"
+       alt="Licence" />
+</p>
+
 # 🤖 WPlace AutoBOT
 
 <p align="center">
