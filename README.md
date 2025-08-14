@@ -1,9 +1,7 @@
 <!-- Badges centrados -->
 <p align="center">
-  <a href="https://hits.seeyoufarm.com">
-    <img src="https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FAlarisco%2FWPlace-AutoBOTV2&count_bg=%23007EC6&title_bg=%23555555&icon=github.svg&icon_color=%23FFFFFF&title=Visitas&edge_flat=false"
-         alt="Visitas"/>
-  </a>
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=Alarisco.WPlace-AutoBOTV2&left_color=black&right_color=blue&style=for-the-badge" alt="Visitas" />
+
   <img src="https://img.shields.io/github/stars/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
        alt="GitHub Stars" />
   <img src="https://img.shields.io/github/forks/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
