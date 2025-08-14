@@ -1,0 +1,13 @@
+name: README Guard
+on:
+  pull_request:
+    paths: ["README.md"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure bookmarklets target raw files in main
+        run: |
+          grep -E 'raw.githubusercontent.com/.*/main/Auto-Farm.js' -n README.md
+          grep -E 'raw.githubusercontent.com/.*/main/Auto-Image.js' -n README.md
