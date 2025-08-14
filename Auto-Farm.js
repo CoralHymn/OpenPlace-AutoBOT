@@ -282,46 +282,85 @@
     }
   }
 
-  // Función para refrescar el tile específico
+  // Función para refrescar el tile específico (solo actualización visual, sin GET)
   async function refreshTile(tileX, tileY) {
     try {
-      // Hacer una petición GET para obtener el estado actual del tile
-      const tileUrl = `https://backend.wplace.live/s0/tile/${tileX}/${tileY}`;
-      const response = await fetch(tileUrl, {
-        method: 'GET',
-        credentials: 'include',
-        headers: { 'Accept': 'application/json' }
-      });
+      // Solo actualizar visualmente el DOM sin hacer GET
+      // El GET a /s0/tile no funciona y no es necesario para el funcionamiento
+      const tileSelector = `[data-tile="${tileX}-${tileY}"], .tile-${tileX}-${tileY}, [data-tile-x="${tileX}"][data-tile-y="${tileY}"]`;
+      const tileElement = document.querySelector(tileSelector);
       
-      if (response.ok) {
-        // Si hay algún elemento en el DOM que represente este tile, actualizarlo
-        const tileSelector = `[data-tile="${tileX}-${tileY}"], .tile-${tileX}-${tileY}`;
-        const tileElement = document.querySelector(tileSelector);
-        if (tileElement) {
-          // Añadir una clase temporal para indicar actualización
-          tileElement.classList.add('tile-updating');
-          setTimeout(() => {
-            tileElement.classList.remove('tile-updating');
-            tileElement.classList.add('tile-updated');
-            setTimeout(() => tileElement.classList.remove('tile-updated'), 1000);
-          }, 100);
-        }
+      if (tileElement) {
+        // Añadir una clase temporal para indicar actualización
+        tileElement.classList.add('tile-updating');
+        setTimeout(() => {
+          tileElement.classList.remove('tile-updating');
+          tileElement.classList.add('tile-updated');
+          setTimeout(() => tileElement.classList.remove('tile-updated'), 1000);
+        }, 100);
+        log(`Tile (${tileX},${tileY}) actualizado visualmente`);
+      } else {
+        // Intentar forzar una actualización del canvas general
+        const canvasElements = document.querySelectorAll('canvas');
+        canvasElements.forEach(canvas => {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Trigger redraw sin hacer cambios
+            const imageData = ctx.getImageData(0, 0, 1, 1);
+            ctx.putImageData(imageData, 0, 0);
+          }
+        });
+        log(`Actualización visual genérica realizada para tile (${tileX},${tileY})`);
       }
     } catch (error) {
-      log('Error refrescando tile:', error);
+      log('Error en actualización visual del tile:', error);
     }
   }
 
   async function postPixel(coords, colors, t) {
-    const body = JSON.stringify({ colors, coords, t });
-    const res = await fetch(`https://backend.wplace.live/s0/pixel/${cfg.TILE_X}/${cfg.TILE_Y}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body
-    });
-    let json = null; try { json = await res.json(); } catch {}
-    return { status: res.status, json };
+    try {
+      const body = JSON.stringify({ colors, coords, t });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // Timeout de 15 segundos
+      
+      const res = await fetch(`https://backend.wplace.live/s0/pixel/${cfg.TILE_X}/${cfg.TILE_Y}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      let json = null;
+      try { 
+        const text = await res.text();
+        if (text) {
+          json = JSON.parse(text);
+        }
+      } catch (parseError) {
+        log('Error parseando respuesta JSON:', parseError);
+        // Si no se puede parsear, pero el status es 200, asumir éxito
+        if (res.status === 200) {
+          json = { painted: Math.min(coords.length / 2, colors.length) };
+        }
+      }
+      
+      return { status: res.status, json };
+    } catch (error) {
+      log('Error en postPixel:', error.name, error.message);
+      
+      // Diferentes tipos de error
+      if (error.name === 'AbortError') {
+        return { status: 408, json: { error: 'Timeout' } }; // Request Timeout
+      }
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        return { status: 0, json: { error: 'Network Error' } }; // Error de red
+      }
+      
+      return { status: 500, json: { error: error.message } };
+    }
   }
 
   async function paintOnce() {
@@ -421,36 +460,87 @@
     } else if (r.status === 429) {
       setStatus('⏳ 429 (límite de tasa). Esperando...', 'error');
     } else if (r.status === 408) {
-      setStatus('⏰ 408 (timeout del servidor). Coordenadas problemáticas o servidor sobrecargado', 'error');
+      setStatus('⏰ Timeout del servidor. Coordenadas problemáticas o servidor sobrecargado', 'error');
+    } else if (r.status === 0) {
+      setStatus('🌐 Error de red. Verificando conectividad...', 'error');
+    } else if (r.status === 500) {
+      setStatus('🔥 500 (error interno del servidor). Reintentará...', 'error');
+    } else if (r.status === 502 || r.status === 503 || r.status === 504) {
+      setStatus(`🚫 ${r.status} (servidor no disponible). Reintentará...`, 'error');
+    } else if (r.status === 404) {
+      setStatus(`🗺️ 404 (tile no encontrado). Verificando coordenadas tile(${cfg.TILE_X},${cfg.TILE_Y})`, 'error');
     } else {
       // Para otros errores, verificar el health del backend
-      await checkBackendHealth();
-      const healthStatus = state.health?.up ? '🟢 Online' : '🔴 Offline';
-      setStatus(`❌ Error ${r.status}: ${r.json?.message || 'Fallo al pintar'} (Backend: ${healthStatus})`, 'error');
+      try {
+        await checkBackendHealth();
+        const healthStatus = state.health?.up ? '🟢 Online' : '🔴 Offline';
+        setStatus(`❌ Error ${r.status}: ${r.json?.message || r.json?.error || 'Fallo al pintar'} (Backend: ${healthStatus})`, 'error');
+      } catch (healthError) {
+        setStatus(`❌ Error ${r.status}: ${r.json?.message || r.json?.error || 'Fallo al pintar'} (Health check falló)`, 'error');
+      }
     }
+    
+    // Log detallado para debugging
+    log(`Fallo en pintado: status=${r.status}, json=`, r.json, 'coords=', coords, 'colors=', colors);
     
     return false;
   }
 
   async function paintWithRetry() {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const success = await paintOnce();
-      if (success) {
-        return true;
-      }
-      
-      state.retryCount = attempt;
-      if (attempt < 3) {
-        setStatus(`❌ Intento ${attempt}/3 falló. Reintentando en 5s...`, 'error');
-        await sleep(5000);
+    const maxAttempts = 5; // Aumentar a 5 intentos
+    const baseDelay = 3000; // Delay base de 3 segundos
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const success = await paintOnce();
+        if (success) {
+          state.retryCount = 0; // Reset en éxito
+          return true;
+        }
+        
+        state.retryCount = attempt;
+        
+        if (attempt < maxAttempts) {
+          // Delay exponencial: 3s, 6s, 12s, 24s
+          const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000); // Máximo 30s
+          setStatus(`❌ Intento ${attempt}/${maxAttempts} falló. Reintentando en ${delay/1000}s...`, 'error');
+          log(`Reintento ${attempt}/${maxAttempts} programado en ${delay/1000}s`);
+          
+          // Verificar si se debe detener durante el delay
+          for (let i = 0; i < delay/1000 && state.running; i++) {
+            await sleep(1000);
+          }
+          
+          if (!state.running) {
+            log('Bot detenido durante reintentos');
+            return false;
+          }
+        }
+      } catch (error) {
+        log(`Error en intento ${attempt}:`, error);
+        state.retryCount = attempt;
+        
+        if (attempt < maxAttempts) {
+          const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000);
+          setStatus(`💥 Error en intento ${attempt}/${maxAttempts}. Reintentando en ${delay/1000}s...`, 'error');
+          
+          for (let i = 0; i < delay/1000 && state.running; i++) {
+            await sleep(1000);
+          }
+          
+          if (!state.running) {
+            return false;
+          }
+        }
       }
     }
     
-    // Si llegamos aquí, fallaron los 3 intentos
+    // Si llegamos aquí, fallaron todos los intentos
     state.inCooldown = true;
-    state.cooldownEndTime = Date.now() + (2 * 60 * 1000); // 2 minutos
+    state.cooldownEndTime = Date.now() + (3 * 60 * 1000); // Aumentar a 3 minutos
     state.retryCount = 0;
-    setStatus('🚫 3 intentos fallidos. Cooldown de 2 minutos...', 'error');
+    setStatus(`🚫 ${maxAttempts} intentos fallidos. Cooldown de 3 minutos...`, 'error');
+    log(`Todos los reintentos fallaron, iniciando cooldown de 3 minutos`);
     return false;
   }
 
@@ -478,32 +568,33 @@
     }
 
     while (state.running) {
-      // Hacer UNA consulta a /me al inicio de cada ciclo
-      await getSession();
-      
-      // Verificar si estamos en cooldown
-      if (state.inCooldown) {
-        const now = Date.now();
-        if (now < state.cooldownEndTime) {
-          const remainingMs = state.cooldownEndTime - now;
-          const remainingSec = Math.ceil(remainingMs / 1000);
-          const remainingMin = Math.floor(remainingSec / 60);
-          const remainingSecOnly = remainingSec % 60;
-          if (remainingMin > 0) {
-            setStatus(`🚫 Cooldown: ${remainingMin}m ${remainingSecOnly}s restantes`, 'error');
+      try {
+        // Hacer UNA consulta a /me al inicio de cada ciclo
+        await getSession();
+        
+        // Verificar si estamos en cooldown
+        if (state.inCooldown) {
+          const now = Date.now();
+          if (now < state.cooldownEndTime) {
+            const remainingMs = state.cooldownEndTime - now;
+            const remainingSec = Math.ceil(remainingMs / 1000);
+            const remainingMin = Math.floor(remainingSec / 60);
+            const remainingSecOnly = remainingSec % 60;
+            if (remainingMin > 0) {
+              setStatus(`🚫 Cooldown: ${remainingMin}m ${remainingSecOnly}s restantes`, 'error');
+            } else {
+              setStatus(`🚫 Cooldown: ${remainingSec}s restantes`, 'error');
+            }
+            await sleep(1000);
+            updateStats();
+            continue;
           } else {
-            setStatus(`🚫 Cooldown: ${remainingSec}s restantes`, 'error');
+            // Cooldown terminado
+            state.inCooldown = false;
+            state.cooldownEndTime = 0;
+            setStatus('✅ Cooldown terminado. Continuando...', 'success');
           }
-          await sleep(1000);
-          updateStats();
-          continue;
-        } else {
-          // Cooldown terminado
-          state.inCooldown = false;
-          state.cooldownEndTime = 0;
-          setStatus('✅ Cooldown terminado. Continuando...', 'success');
         }
-      }
 
       const { count } = state.charges;
       
@@ -555,20 +646,62 @@
       
       // Si tenemos cargas disponibles, pintar
       state.nextPaintTime = Date.now() + cfg.DELAY_MS;
-      const paintSuccess = await paintWithRetry();
-      updateStats();
       
-      // Si el pixel se pintó exitosamente, mantener el mensaje de éxito por 3 segundos
-      if (paintSuccess) {
-        await sleep(3000); // Mostrar mensaje de éxito por 3 segundos
-        // Luego mostrar countdown con el tiempo restante
-        const remainingDelay = cfg.DELAY_MS - 3000;
-        if (remainingDelay > 0) {
-          await sleepWithCountdown(remainingDelay);
+      try {
+        const paintSuccess = await paintWithRetry();
+        updateStats();
+        
+        // Si el pixel se pintó exitosamente, mantener el mensaje de éxito por 3 segundos
+        if (paintSuccess) {
+          await sleep(3000); // Mostrar mensaje de éxito por 3 segundos
+          // Luego mostrar countdown con el tiempo restante
+          const remainingDelay = cfg.DELAY_MS - 3000;
+          if (remainingDelay > 0) {
+            await sleepWithCountdown(remainingDelay);
+          }
+        } else {
+          // Si falló el pintado, verificar el estado del backend
+          try {
+            await checkBackendHealth();
+          } catch (healthError) {
+            log('Error verificando health del backend:', healthError);
+          }
+          
+          // Si falló, mostrar countdown completo
+          await sleepWithCountdown(cfg.DELAY_MS);
         }
-      } else {
-        // Si falló, mostrar countdown completo
-        await sleepWithCountdown(cfg.DELAY_MS);
+      } catch (paintError) {
+        // Error crítico en el proceso de pintado
+        log('Error crítico en paintWithRetry:', paintError);
+        setStatus(`💥 Error crítico: ${paintError.message}. Cooldown de seguridad...`, 'error');
+        
+        // Cooldown de seguridad
+        state.inCooldown = true;
+        state.cooldownEndTime = Date.now() + (5 * 60 * 1000); // 5 minutos
+        
+        // Verificar health del backend
+        try {
+          await checkBackendHealth();
+        } catch (healthError) {
+          log('Error verificando health tras error crítico:', healthError);
+        }
+        
+        updateStats();
+      }
+      } catch (cycleError) {
+        // Error en el ciclo principal
+        log('Error en ciclo del loop:', cycleError);
+        setStatus(`💥 Error en ciclo: ${cycleError.message}. Reintentando en 10s...`, 'error');
+        
+        // Pausa de seguridad antes de continuar
+        await sleep(10000);
+        
+        // Verificar health del backend
+        try {
+          await checkBackendHealth();
+        } catch (healthError) {
+          log('Error verificando health tras error de ciclo:', healthError);
+        }
       }
     }
   }
@@ -725,7 +858,6 @@
           <div><label>Delay (seg)</label><input id="wpa-delay" class="wpa-input" type="number" min="5" max="300" /></div>
           <div><label>Min. Cargas</label><input id="wpa-mincharges" class="wpa-input" type="number" min="1" max="50" /></div>
           <div><label>Píxeles/Lote</label><input id="wpa-pixelsbatch" class="wpa-input" type="number" min="1" max="50" /></div>
-          <div><label>Sitekey</label><input id="wpa-sitekey" class="wpa-input" type="text" /></div>
           <div>
             <label>Color</label>
             <select id="wpa-cmode" class="wpa-select">
@@ -748,7 +880,7 @@
           <div class="wpa-stat"><span>Painted</span><span id="wpa-painted">0</span></div>
           <div class="wpa-stat"><span>Último</span><span id="wpa-last">-</span></div>
           <div class="wpa-stat"><span>Estado</span><span id="wpa-running">🔴 Detenido</span></div>
-          <div class="wpa-stat" id="wpa-retry-info" style="display:none"><span>Reintentos</span><span id="wpa-retries">0/3</span></div>
+          <div class="wpa-stat" id="wpa-retry-info" style="display:none"><span>Reintentos</span><span id="wpa-retries">0/5</span></div>
           <div class="wpa-stat" id="wpa-cooldown-info" style="display:none"><span>Cooldown</span><span id="wpa-cooldown">-</span></div>
         </div>
 
@@ -767,7 +899,7 @@
     // Inputs
     const el = {
       delay: $('#wpa-delay'),
-      mincharges: $('#wpa-mincharges'), pixelsbatch: $('#wpa-pixelsbatch'), sitekey: $('#wpa-sitekey'), cmode: $('#wpa-cmode'), cfixed: $('#wpa-cfixed'),
+      mincharges: $('#wpa-mincharges'), pixelsbatch: $('#wpa-pixelsbatch'), cmode: $('#wpa-cmode'), cfixed: $('#wpa-cfixed'),
       start: $('#wpa-start'), once: $('#wpa-once'), stop: $('#wpa-stop'),
       status: $('#wpa-status'), user: $('#wpa-user'), charges: $('#wpa-charges'),
       painted: $('#wpa-painted'), last: $('#wpa-last'), running: $('#wpa-running'), 
@@ -788,7 +920,6 @@
         el.pixelsbatch.value = cfg.PIXELS_PER_BATCH; // Asegurar que el input muestre el valor clampado
         saveCfg(); 
       });
-      el.sitekey.addEventListener('change', () => { cfg.SITEKEY = el.sitekey.value.trim() || cfg.SITEKEY; saveCfg(); });
       el.cmode.addEventListener('change', () => { 
         cfg.COLOR_MODE = el.cmode.value; 
         toggleColorFixedField();
@@ -851,7 +982,6 @@
     $('#wpa-delay').value = Math.floor(cfg.DELAY_MS / 1000); // Mostrar en segundos
     $('#wpa-mincharges').value = cfg.MIN_CHARGES;
     $('#wpa-pixelsbatch').value = cfg.PIXELS_PER_BATCH;
-    $('#wpa-sitekey').value = cfg.SITEKEY;
     $('#wpa-cmode').value = cfg.COLOR_MODE;
     $('#wpa-cfixed').value = cfg.COLOR_FIXED;
   }
@@ -920,7 +1050,7 @@
     
     // Mostrar información de reintentos solo si hay reintentos activos
     if (state.retryCount > 0) {
-      $('#wpa-retries').textContent = `${state.retryCount}/3`;
+      $('#wpa-retries').textContent = `${state.retryCount}/5`;
       $('#wpa-retry-info').style.display = 'flex';
     } else {
       $('#wpa-retry-info').style.display = 'none';
@@ -1180,6 +1310,76 @@
       setStatus('🔄 Configuración reseteada. Pinta un pixel manualmente para recalibrar.', 'error');
       enableCaptureOnce();
       console.log('✅ Configuración reseteada a valores seguros');
+    },
+    
+    // Función para diagnosticar sistema de reintentos
+    debugRetries: () => {
+      console.log('🔄 SISTEMA DE REINTENTOS:');
+      console.log('─'.repeat(50));
+      console.log(`Reintentos actuales: ${state.retryCount}/5`);
+      console.log(`En cooldown: ${state.inCooldown ? '✅ SÍ' : '❌ NO'}`);
+      if (state.inCooldown && state.cooldownEndTime > Date.now()) {
+        const remainingMs = state.cooldownEndTime - Date.now();
+        const remainingMin = Math.floor(remainingMs / 60000);
+        const remainingSec = Math.floor((remainingMs % 60000) / 1000);
+        console.log(`Tiempo restante de cooldown: ${remainingMin}m ${remainingSec}s`);
+      }
+      console.log(`Última respuesta del servidor: ${state.last?.status || 'N/A'}`);
+      if (state.last?.json) {
+        console.log(`Respuesta JSON:`, state.last.json);
+      }
+      console.log('─'.repeat(50));
+      
+      // Consejos según el estado
+      if (state.retryCount > 0) {
+        console.log('💡 CONSEJOS:');
+        console.log('- El bot está reintentando automáticamente');
+        console.log('- Los delays son exponenciales: 3s, 6s, 12s, 24s');
+        console.log('- Después de 5 fallos hay cooldown de 3 minutos');
+      }
+      if (state.inCooldown) {
+        console.log('⏰ El bot está en cooldown de seguridad');
+        console.log('- Esto es normal después de errores consecutivos');
+        console.log('- Use WPAUI.checkHealth() para verificar el backend');
+      }
+      
+      return {
+        retryCount: state.retryCount,
+        inCooldown: state.inCooldown,
+        cooldownEndTime: state.cooldownEndTime,
+        lastStatus: state.last?.status,
+        lastResponse: state.last?.json
+      };
+    },
+    
+    // Función para forzar salir del cooldown (usar con cuidado)
+    forceClearCooldown: () => {
+      const wasCooldown = state.inCooldown;
+      state.inCooldown = false;
+      state.cooldownEndTime = 0;
+      state.retryCount = 0;
+      
+      if (wasCooldown) {
+        setStatus('🔓 Cooldown forzado a terminar por el usuario', 'success');
+        console.log('⚠️ Cooldown eliminado manualmente');
+        updateStats();
+      } else {
+        console.log('ℹ️ No había cooldown activo');
+      }
+      
+      return !wasCooldown;
+    },
+    
+    // Función para simular error (para testing)
+    simulateError: (statusCode = 500) => {
+      console.log(`🧪 Simulando error ${statusCode} para testing...`);
+      state.last = {
+        x: 0, y: 0, color: 1,
+        status: statusCode,
+        json: { error: 'Error simulado para testing' }
+      };
+      updateStats();
+      setStatus(`🧪 Error ${statusCode} simulado`, 'error');
     }
   };
 
