@@ -1,2 +1,2 @@
 # Seguridad
-Reporta vulnerabilidades por correo: security@ejemplo.com
+Reporta vulnerabilidades a traves de la pestaña ISSUE
