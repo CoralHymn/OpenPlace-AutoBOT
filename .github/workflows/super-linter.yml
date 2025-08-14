@@ -1,0 +1,22 @@
+name: Super Linter
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint code base
+        uses: super-linter/super-linter@v6
+        env:
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_JAVASCRIPT_ES: true
+          VALIDATE_JSON: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_YAML: true
