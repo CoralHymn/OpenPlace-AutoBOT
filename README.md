@@ -21,7 +21,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/WPlace-AutoBOT-blue?style=for-the-badge" alt="WPlace AutoBOT">
   <img src="https://img.shields.io/badge/JavaScript-ES6+-yellow?style=for-the-badge" alt="JavaScript">
-  <img src="https://img.shields.io/badge/Licence-MIT-green?style=for-the-badge" alt="Licence">
 </p>
 
 <p align="center">
