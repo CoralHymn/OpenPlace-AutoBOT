@@ -29,6 +29,8 @@
       selectPosition: "Seleccionar Posición",
       startPainting: "Iniciar Pintura",
       stopPainting: "Detener Pintura",
+      saveProgress: "Guardar Progreso",
+      loadProgress: "Cargar Progreso",
       checkingColors: "🔍 Verificando colores disponibles...",
       noColorsFound: "❌ ¡Abre la paleta de colores en el sitio e inténtalo de nuevo!",
       colorsFound: "✅ {count} colores disponibles encontrados",
@@ -55,7 +57,15 @@
       resizeSuccess: "✅ Imagen redimensionada a {width}x{height}",
       paintingPaused: "⏸️ Pintura pausada en la posición X: {x}, Y: {y}",
       pixelsPerBatch: "Píxeles por lote",
-      cooldownWaiting: "⏳ Esperando {time} para continuar..."
+      cooldownWaiting: "⏳ Esperando {time} para continuar...",
+      progressSaved: "✅ Progreso guardado como {filename}",
+      progressLoaded: "✅ Progreso cargado: {painted}/{total} píxeles pintados",
+      progressLoadError: "❌ Error al cargar progreso: {error}",
+      progressSaveError: "❌ Error al guardar progreso: {error}",
+      confirmSaveProgress: "¿Deseas guardar el progreso actual antes de detener?",
+      saveProgressTitle: "Guardar Progreso",
+      discardProgress: "Descartar",
+      cancel: "Cancelar"
     }
   };
 
@@ -85,7 +95,8 @@
     cooldownEndTime: 0, // Timestamp del final del cooldown
     remainingPixels: [], // Lista de píxeles pendientes para pintar
     lastChargeUpdate: 0, // Timestamp de la última actualización de cargas
-    chargeDecimalPart: 0 // Parte decimal para calcular el cooldown restante
+    chargeDecimalPart: 0, // Parte decimal para calcular el cooldown restante
+    originalImageName: null // Nombre original de la imagen cargada
   };
 
   function detectLanguage() {
@@ -229,6 +240,271 @@
         host.style.position = 'fixed'; host.style.left = '-9999px';
         document.body.appendChild(host);
         window.turnstile.render(host, { sitekey: CONFIG.SITEKEY, callback: (t) => resolve(t) });
+      });
+    },
+
+    // Funciones de manejo de progreso
+    generateProgressFileName: () => {
+      const imageName = state.originalImageName || 'imagen';
+      const cleanImageName = imageName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9]/g, '_');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      return `wplace_progress_${cleanImageName}_tile_${state.tileX}_${state.tileY}_${timestamp}.json`;
+    },
+
+    serializeProgress: () => {
+      if (!state.imageLoaded || !state.imageData) {
+        throw new Error('No hay imagen cargada para guardar');
+      }
+
+      if (!state.startPosition || state.tileX === null || state.tileY === null) {
+        throw new Error('No hay posición establecida para guardar');
+      }
+
+      // Convertir ImageData a array para serialización
+      const pixelsArray = Array.from(state.imageData.pixels);
+
+      const progressData = {
+        version: "1.0",
+        timestamp: new Date().toISOString(),
+        imageData: {
+          width: state.imageData.width,
+          height: state.imageData.height,
+          pixels: pixelsArray,
+          totalPixels: state.imageData.totalPixels || state.totalPixels
+        },
+        position: {
+          tileX: state.tileX,
+          tileY: state.tileY,
+          startX: state.startPosition.x,
+          startY: state.startPosition.y,
+          lastX: state.lastPosition ? state.lastPosition.x : state.startPosition.x,
+          lastY: state.lastPosition ? state.lastPosition.y : state.startPosition.y
+        },
+        progress: {
+          paintedPixels: state.paintedPixels || 0,
+          totalPixels: state.totalPixels || 0,
+          remainingPixels: state.remainingPixels || [],
+          pixelsPerBatch: state.pixelsPerBatch || CONFIG.PIXELS_PER_BATCH
+        },
+        colors: state.availableColors || [],
+        metadata: {
+          imageName: state.originalImageName || 'imagen_sin_nombre',
+          savedAt: new Date().toISOString(),
+          appVersion: "Auto-Image v1.0"
+        }
+      };
+
+      return progressData;
+    },
+
+    downloadProgress: () => {
+      try {
+        // Generar datos de progreso
+        const progressData = Utils.serializeProgress();
+        
+        // Generar nombre de archivo
+        const fileName = Utils.generateProgressFileName();
+        
+        // Serializar a JSON
+        const jsonString = JSON.stringify(progressData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        // Descargar archivo
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        return fileName;
+      } catch (error) {
+        throw new Error(`Error al guardar progreso: ${error.message}`);
+      }
+    },
+
+    validateProgressData: (data) => {
+      const requiredFields = ['version', 'imageData', 'position', 'progress', 'colors'];
+      const missingFields = requiredFields.filter(field => !data.hasOwnProperty(field));
+      
+      if (missingFields.length > 0) {
+        throw new Error(`Archivo de progreso inválido. Faltan campos: ${missingFields.join(', ')}`);
+      }
+
+      if (!data.imageData.pixels || !Array.isArray(data.imageData.pixels)) {
+        throw new Error('Datos de imagen inválidos en el archivo de progreso');
+      }
+
+      if (!data.position.tileX || !data.position.tileY) {
+        throw new Error('Coordenadas de tile inválidas en el archivo de progreso');
+      }
+
+      if (!Array.isArray(data.colors) || data.colors.length === 0) {
+        throw new Error('Datos de colores inválidos en el archivo de progreso');
+      }
+
+      return true;
+    },
+
+    loadProgressFromFile: (file) => {
+      return new Promise((resolve, reject) => {
+        if (!file) {
+          reject(new Error('No se seleccionó ningún archivo'));
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const progressData = JSON.parse(reader.result);
+            Utils.validateProgressData(progressData);
+            const progressInfo = Utils.restoreProgress(progressData);
+            resolve(progressInfo);
+          } catch (error) {
+            reject(new Error(`Error al cargar el archivo: ${error.message}`));
+          }
+        };
+        reader.onerror = () => reject(new Error('Error al leer el archivo'));
+        reader.readAsText(file);
+      });
+    },
+
+    restoreProgress: (progressData) => {
+      try {
+        // Validar que los colores actuales coincidan con los guardados
+        if (!state.colorsChecked || state.availableColors.length === 0) {
+          throw new Error('Debes inicializar el bot y verificar colores antes de cargar progreso');
+        }
+
+        // Verificar compatibilidad de colores (al menos 80% deben coincidir)
+        const savedColorIds = progressData.colors.map(c => c.id);
+        const currentColorIds = state.availableColors.map(c => c.id);
+        const commonColors = savedColorIds.filter(id => currentColorIds.includes(id));
+        
+        if (commonColors.length < savedColorIds.length * 0.8) {
+          throw new Error(`Incompatibilidad de colores. Solo ${commonColors.length}/${savedColorIds.length} colores coinciden. Verifica que la paleta sea la misma.`);
+        }
+
+        // Restaurar datos de imagen
+        const pixelsUint8 = new Uint8ClampedArray(progressData.imageData.pixels);
+        
+        state.imageData = {
+          width: progressData.imageData.width,
+          height: progressData.imageData.height,
+          pixels: pixelsUint8,
+          totalPixels: progressData.imageData.totalPixels,
+          processor: null // Se recreará si es necesario
+        };
+
+        // Restaurar posiciones
+        state.tileX = progressData.position.tileX;
+        state.tileY = progressData.position.tileY;
+        state.startPosition = {
+          x: progressData.position.startX,
+          y: progressData.position.startY
+        };
+        state.lastPosition = {
+          x: progressData.position.lastX,
+          y: progressData.position.lastY
+        };
+
+        // Restaurar progreso
+        state.totalPixels = progressData.progress.totalPixels;
+        state.paintedPixels = progressData.progress.paintedPixels;
+        state.remainingPixels = progressData.progress.remainingPixels || [];
+        state.pixelsPerBatch = progressData.progress.pixelsPerBatch || CONFIG.PIXELS_PER_BATCH;
+
+        // Restaurar colores (usar los actuales pero validar)
+        // No restauramos los colores directamente, usamos los actuales del DOM
+
+        // Restaurar metadata
+        state.originalImageName = progressData.metadata?.imageName || 'imagen_cargada';
+
+        // Marcar como imagen cargada y posición establecida
+        state.imageLoaded = true;
+        state.positionSelected = true;
+        state.selectingPosition = false;
+        
+        // Crear una región temporal para compatibilidad
+        const regionWidth = Math.min(state.imageData.width, 64);
+        const regionHeight = Math.min(state.imageData.height, 64);
+        state.region = {
+          startX: state.startPosition.x,
+          startY: state.startPosition.y,
+          endX: state.startPosition.x + regionWidth - 1,
+          endY: state.startPosition.y + regionHeight - 1,
+          width: regionWidth,
+          height: regionHeight
+        };
+
+        // Actualizar configuración de píxeles por lote en la UI
+        const pixelsPerBatchInput = document.querySelector('#pixelsPerBatchInput');
+        if (pixelsPerBatchInput) {
+          pixelsPerBatchInput.value = state.pixelsPerBatch;
+        }
+
+        return {
+          imageName: state.originalImageName,
+          totalPixels: state.totalPixels,
+          paintedPixels: state.paintedPixels,
+          remainingPixels: state.remainingPixels.length,
+          position: `tile(${state.tileX}, ${state.tileY}) start(${state.startPosition.x}, ${state.startPosition.y})`
+        };
+
+      } catch (error) {
+        throw new Error(`Error al restaurar progreso: ${error.message}`);
+      }
+    },
+
+    // Funciones para el modal de guardar progreso
+    showSaveProgressModal: () => {
+      const modal = document.getElementById('saveProgressModal');
+      const overlay = document.getElementById('modalOverlay');
+      if (modal && overlay) {
+        overlay.style.display = 'block';
+        modal.style.display = 'block';
+      }
+    },
+
+    hideSaveProgressModal: () => {
+      const modal = document.getElementById('saveProgressModal');
+      const overlay = document.getElementById('modalOverlay');
+      if (modal && overlay) {
+        overlay.style.display = 'none';
+        modal.style.display = 'none';
+      }
+    },
+
+    // Función que devuelve una promesa para el diálogo de guardar progreso
+    showSaveProgressDialog: () => {
+      return new Promise((resolve) => {
+        Utils.showSaveProgressModal();
+        
+        const saveBtn = document.getElementById('saveProgressBtn');
+        const discardBtn = document.getElementById('discardProgressBtn');
+        const cancelBtn = document.getElementById('cancelStopBtn');
+        const overlay = document.getElementById('modalOverlay');
+        
+        const handleResponse = (response) => {
+          Utils.hideSaveProgressModal();
+          // Remover event listeners para evitar múltiples respuestas
+          saveBtn.removeEventListener('click', handleSave);
+          discardBtn.removeEventListener('click', handleDiscard);
+          cancelBtn.removeEventListener('click', handleCancel);
+          overlay.removeEventListener('click', handleCancel);
+          resolve(response);
+        };
+        
+        const handleSave = () => handleResponse('save');
+        const handleDiscard = () => handleResponse('discard');
+        const handleCancel = () => handleResponse('cancel');
+        
+        saveBtn.addEventListener('click', handleSave);
+        discardBtn.addEventListener('click', handleDiscard);
+        cancelBtn.addEventListener('click', handleCancel);
+        overlay.addEventListener('click', handleCancel);
       });
     }
   };
@@ -557,6 +833,14 @@
         color: white;
         border: 1px dashed ${CONFIG.THEME.text};
       }
+      .wplace-btn-load {
+        background: #2196F3;
+        color: white;
+        border: 1px solid #1976D2;
+      }
+      .wplace-btn-load:hover {
+        background: #1976D2;
+      }
       .wplace-btn-start {
         background: ${CONFIG.THEME.success};
         color: white;
@@ -660,6 +944,83 @@
         max-height: 90%;
         overflow: auto;
       }
+      .save-progress-modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: ${CONFIG.THEME.primary};
+        border: 2px solid ${CONFIG.THEME.accent};
+        border-radius: 15px;
+        padding: 25px;
+        z-index: 10002;
+        color: ${CONFIG.THEME.text};
+        min-width: 350px;
+        max-width: 400px;
+        display: none;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      }
+      .save-progress-modal h3 {
+        margin: 0 0 15px 0;
+        color: ${CONFIG.THEME.text};
+        text-align: center;
+        font-size: 18px;
+      }
+      .save-progress-modal p {
+        margin: 0 0 20px 0;
+        color: ${CONFIG.THEME.text};
+        text-align: center;
+        line-height: 1.4;
+      }
+      .save-progress-modal .modal-buttons {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+      }
+      .save-progress-modal .modal-btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s;
+        min-width: 100px;
+      }
+      .save-progress-modal .modal-btn-save {
+        background: ${CONFIG.THEME.success};
+        color: white;
+      }
+      .save-progress-modal .modal-btn-save:hover {
+        background: #45a049;
+        transform: translateY(-2px);
+      }
+      .save-progress-modal .modal-btn-discard {
+        background: ${CONFIG.THEME.error};
+        color: white;
+      }
+      .save-progress-modal .modal-btn-discard:hover {
+        background: #da190b;
+        transform: translateY(-2px);
+      }
+      .save-progress-modal .modal-btn-cancel {
+        background: ${CONFIG.THEME.secondary};
+        color: white;
+      }
+      .save-progress-modal .modal-btn-cancel:hover {
+        background: #555;
+        transform: translateY(-2px);
+      }
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.7);
+        z-index: 10001;
+        display: none;
+      }
       .resize-preview {
         max-width: 100%;
         max-height: 300px;
@@ -725,6 +1086,10 @@
           <button id="uploadBtn" class="wplace-btn wplace-btn-upload" disabled>
             <i class="fas fa-upload"></i>
             <span>${Utils.t('uploadImage')}</span>
+          </button>
+          <button id="loadProgressBtn" class="wplace-btn wplace-btn-load" disabled>
+            <i class="fas fa-file-import"></i>
+            <span>${Utils.t('loadProgress')}</span>
           </button>
           <button id="resizeBtn" class="wplace-btn wplace-btn-primary" disabled>
             <i class="fas fa-expand"></i>
@@ -796,9 +1161,43 @@
     const resizeOverlay = document.createElement('div');
     resizeOverlay.className = 'resize-overlay';
     
+    // Crear modal para guardar progreso
+    const saveProgressModal = document.createElement('div');
+    saveProgressModal.className = 'save-progress-modal';
+    saveProgressModal.id = 'saveProgressModal';
+    saveProgressModal.innerHTML = `
+      <h3><i class="fas fa-save"></i> ${Utils.t('saveProgressTitle')}</h3>
+      <p>${Utils.t('confirmSaveProgress')}</p>
+      <div class="modal-buttons">
+        <button id="saveProgressBtn" class="modal-btn modal-btn-save">
+          <i class="fas fa-save"></i> ${Utils.t('saveProgress')}
+        </button>
+        <button id="discardProgressBtn" class="modal-btn modal-btn-discard">
+          <i class="fas fa-trash"></i> ${Utils.t('discardProgress')}
+        </button>
+        <button id="cancelStopBtn" class="modal-btn modal-btn-cancel">
+          <i class="fas fa-times"></i> ${Utils.t('cancel')}
+        </button>
+      </div>
+    `;
+    
+    const modalOverlay = document.createElement('div');
+    modalOverlay.className = 'modal-overlay';
+    modalOverlay.id = 'modalOverlay';
+    
     document.body.appendChild(container);
     document.body.appendChild(resizeOverlay);
     document.body.appendChild(resizeContainer);
+    document.body.appendChild(modalOverlay);
+    document.body.appendChild(saveProgressModal);
+    
+    // Crear input file oculto para cargar progreso
+    const loadProgressInput = document.createElement('input');
+    loadProgressInput.type = 'file';
+    loadProgressInput.accept = '.json';
+    loadProgressInput.style.display = 'none';
+    loadProgressInput.id = 'loadProgressInput';
+    document.body.appendChild(loadProgressInput);
     
     const header = container.querySelector('.wplace-header');
     let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
@@ -834,6 +1233,7 @@
     const selectPosBtn = container.querySelector('#selectPosBtn');
     const startBtn = container.querySelector('#startBtn');
     const stopBtn = container.querySelector('#stopBtn');
+    const loadProgressBtn = container.querySelector('#loadProgressBtn');
     const minimizeBtn = container.querySelector('#minimizeBtn');
     const configBtn = container.querySelector('#configBtn');
     const statusText = container.querySelector('#statusText');
@@ -1097,6 +1497,7 @@
         
         state.colorsChecked = true;
         uploadBtn.disabled = false;
+        loadProgressBtn.disabled = false;
         selectPosBtn.disabled = false;
         initBotBtn.style.display = 'none';
         
@@ -1159,6 +1560,57 @@
         updateUI('imageLoaded', 'success', { count: totalValidPixels });
       } catch {
         updateUI('imageError', 'error');
+      }
+    });
+    
+    // Event listener para cargar progreso
+    loadProgressBtn.addEventListener('click', () => {
+      // Disparar directamente el input file (debe ser síncrono)
+      loadProgressInput.click();
+    });
+    
+    // Event listener para el input file de cargar progreso
+    loadProgressInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      try {
+        updateUI('loadingImage', 'default');
+        const progressInfo = await Utils.loadProgressFromFile(file);
+        
+        // Habilitar botones apropiados después de cargar progreso
+        uploadBtn.disabled = false;
+        selectPosBtn.disabled = false;
+        resizeBtn.disabled = false;
+        
+        // Debug: verificar el estado antes de habilitar el botón de inicio
+        console.log('Estado después de cargar progreso:', {
+          imageLoaded: state.imageLoaded,
+          startPosition: state.startPosition,
+          region: state.region,
+          colorsChecked: state.colorsChecked
+        });
+        
+        // Si se cargó el progreso correctamente, habilitar inicio de pintura
+        if (state.imageLoaded && state.startPosition && state.region) {
+          startBtn.disabled = false;
+          console.log('✅ Botón de inicio habilitado');
+        } else {
+          console.log('❌ Botón de inicio NO habilitado - faltan condiciones');
+        }
+        
+        updateStats();
+        updateUI('progressLoaded', 'success', {
+          painted: progressInfo.paintedPixels,
+          total: progressInfo.totalPixels
+        });
+        
+      } catch (error) {
+        Utils.showAlert(Utils.t('progressLoadError', { error: error.message }), 'error');
+        updateUI('imageError', 'error');
+      } finally {
+        // Limpiar el input para permitir cargar el mismo archivo de nuevo
+        loadProgressInput.value = '';
       }
     });
     
@@ -1329,6 +1781,7 @@
             // Si terminó completamente, habilitar nuevos procesos
             startBtn.disabled = true;
             uploadBtn.disabled = false;
+            loadProgressBtn.disabled = false;
             selectPosBtn.disabled = false;
             resizeBtn.disabled = false;
           } else {
@@ -1338,6 +1791,7 @@
             } else {
               startBtn.disabled = true;
               uploadBtn.disabled = false;
+              loadProgressBtn.disabled = false;
               selectPosBtn.disabled = false;
               resizeBtn.disabled = false;
             }
@@ -1345,11 +1799,33 @@
         }
       });
       
-      stopBtn.addEventListener('click', () => {
+      stopBtn.addEventListener('click', async () => {
         state.stopFlag = true;
         state.running = false;
         state.inCooldown = false;
         stopBtn.disabled = true;
+        
+        // Si hay progreso que guardar, preguntar al usuario
+        const hasProgress = state.remainingPixels && state.remainingPixels.length > 0 && state.paintedPixels > 0;
+        
+        if (hasProgress) {
+          try {
+            const userChoice = await Utils.showSaveProgressDialog();
+            
+            if (userChoice === 'save') {
+              const filename = await Utils.downloadProgress();
+              Utils.showAlert(Utils.t('progressSaved', { filename }), 'success');
+            } else if (userChoice === 'cancel') {
+              // El usuario canceló, no detener la pintura
+              stopBtn.disabled = false;
+              return;
+            }
+            // Si userChoice === 'discard', continuar sin guardar
+            
+          } catch (error) {
+            Utils.showAlert(Utils.t('progressSaveError', { error: error.message }), 'error');
+          }
+        }
         
         // Permitir reanudar desde donde se pausó si hay píxeles pendientes
         if (state.remainingPixels && state.remainingPixels.length > 0) {
@@ -1358,6 +1834,7 @@
         } else {
           startBtn.disabled = true;
           uploadBtn.disabled = false;
+          loadProgressBtn.disabled = false;
           selectPosBtn.disabled = false;
           resizeBtn.disabled = false;
         }

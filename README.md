@@ -85,6 +85,8 @@ javascript:fetch("https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOTV2/re
 - ✅ Selección precisa de posición
 - ✅ Pintado por lotes optimizado
 - ✅ Sistema de cooldown automático
+- ✅ **💾 Guardar/Cargar progreso**
+- ✅ **⏸️ Pausar y reanudar trabajos**
 - ✅ Interfaz 100% en español
 
 ---
@@ -127,7 +129,9 @@ javascript:fetch("https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOTV2/re
 - **🎯 Posición precisa:** Selección exacta del punto de inicio  
 - **⚡ Pintado optimizado:** Lotes de 20 píxeles (configurable 1-50)
 - **🔋 Gestión de cargas:** Sistema inteligente de cooldown
-- **🚫 Anti-ban:** Mínimas consultas API, comportamiento humano
+- **� Guardar/Cargar progreso:** Pausa y reanuda proyectos
+- **📁 Archivos JSON:** Formato estándar para compatibilidad
+- **�🚫 Anti-ban:** Mínimas consultas API, comportamiento humano
 - **🇪🇸 Interfaz española:** 100% traducido
 
 ### 🚀 Uso Paso a Paso
@@ -171,6 +175,43 @@ javascript:fetch("https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOTV2/re
 4. El bot esperará cooldowns automáticamente
 ```
 
+### 💾 Sistema de Guardar/Cargar Progreso
+
+#### 📁 **Guardar Progreso**
+```
+Opción 1: Al detener manualmente
+1. Clic en "Detener Pintura" 
+2. Aparece modal personalizado
+3. Selecciona "💾 Guardar Progreso"
+4. Se descarga archivo JSON automáticamente
+
+Opción 2: Nombre automático
+- Formato: "imagen_X_Y_progreso.json"
+- Incluye nombre original y coordenadas
+- Compatible con todos los navegadores
+```
+
+#### 📂 **Cargar Progreso**
+```
+1. Clic en "Cargar Progreso"
+2. Selecciona archivo JSON guardado
+3. Validación automática de datos
+4. Restauración completa del estado:
+   ✅ Imagen original
+   ✅ Posición de inicio  
+   ✅ Píxeles ya pintados
+   ✅ Píxeles restantes
+   ✅ Configuración de lotes
+5. Continúa desde donde lo dejaste
+```
+
+#### 🔄 **Características del Sistema**
+- **🛡️ Validación robusta:** Verifica integridad de archivos
+- **🎨 Compatibilidad de colores:** Verifica paleta actual vs guardada
+- **📊 Información completa:** Progreso, posición, metadata
+- **⚡ Carga instantánea:** Restaura estado en segundos
+- **🔒 Formato seguro:** JSON estándar, sin ejecutables
+
 ### ⚙️ Configuración Avanzada
 
 #### 🎨 **Píxeles por Lote**
@@ -205,7 +246,27 @@ setPixelsPerBatch(25)
 
 // Ver estado actual
 console.log(state)
+
+// Debug del sistema de progreso
+console.log('Progreso:', state.paintedPixels, '/', state.totalPixels)
 ```
+
+### 🎯 Casos de Uso del Sistema de Progreso
+
+#### 📋 **Proyectos Grandes**
+- **Arte complejo:** Divide trabajos de varios días
+- **Sesiones largas:** Pausa cuando necesites el ordenador
+- **Gestión de tiempo:** Programa pintado en horarios específicos
+
+#### 🔄 **Flexibilidad Total**
+- **Cambio de dispositivo:** Continúa en otro ordenador
+- **Interrupciones:** Pausas imprevistas sin pérdida
+- **Experimentación:** Prueba diferentes configuraciones
+
+#### 📁 **Organización**
+- **Múltiples proyectos:** Gestiona varios trabajos simultáneamente
+- **Respaldos:** Copia de seguridad de tu progreso
+- **Compartir:** Envía tu progreso a otros usuarios
 
 ### ⚠️ Consejos y Buenas Prácticas
 
@@ -214,12 +275,17 @@ console.log(state)
 - **Posición central:** Evita los bordes del canvas
 - **Lotes moderados:** 15-25 píxeles por lote funciona mejor
 - **Supervisa el proceso:** Revisa el progreso ocasionalmente
+- **💾 Guarda frecuentemente:** Especialmente en proyectos grandes
+- **📁 Organiza archivos:** Nombra tus proyectos descriptivamente
+- **🔄 Verifica compatibilidad:** Antes de cargar progreso viejo
 
 #### ❌ **Evitar**
 - **Imágenes muy grandes:** Consumirá muchas cargas
 - **Lotes muy grandes:** Puede causar errores de API
 - **Posiciones en bordes:** Coordenadas cerca de 0 o 3000
 - **Múltiples instancias:** Solo ejecuta un bot por pestaña
+- **❌ Archivos corruptos:** No modifiques JSONs manualmente
+- **⚠️ Progreso antiguo:** Verifica compatibilidad de colores
 
 ---
 
@@ -256,6 +322,9 @@ Ambos bots incluyen protecciones avanzadas:
 | **Error 403/429** | Límites de API | Aumenta delays |
 | **"Coordenadas peligrosas"** | Muy cerca del borde | Recalibra en zona central |
 | **Bot no responde** | Error de JavaScript | Recarga página y reintenta |
+| **"Error al cargar progreso"** | Archivo JSON inválido | Verifica integridad del archivo |
+| **"Incompatibilidad de colores"** | Paleta diferente | Reinicia bot y verifica colores |
+| **Progreso no se guarda** | Permisos de descarga | Permite descargas en el navegador |
 
 ### 📞 Contacto
 
