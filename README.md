@@ -1,6 +1,7 @@
 <!-- Badges centrados -->
 <p align="center">
-
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=Alarisco.WPlace-AutoBOTV2&left_color=black&right_color=blue&style=for-the-badge" alt="Visitas" />
+  
   <img src="https://img.shields.io/github/stars/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
        alt="GitHub Stars" />
   <img src="https://img.shields.io/github/forks/Alarisco/WPlace-AutoBOTV2?style=for-the-badge&logo=github"
@@ -271,5 +272,4 @@ Los bots se actualizan automáticamente al ejecutar el bookmarklet. Siempre obti
 <p align="center">
   <strong>🎨 Hecho con ❤️ para la comunidad de WPlace</strong><br>
   <em>Usa responsablemente y disfruta creando arte píxel a píxel</em>
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=Alarisco.WPlace-AutoBOTV2&left_color=black&right_color=blue&style=for-the-badge" alt="Visitas" />
 </p>
