@@ -6,6 +6,8 @@ import { saveProgress, loadProgress, clearProgress, getProgressInfo } from "./sa
 import { createImageUI, showConfirmDialog } from "./ui.js";
 import { getSession } from "../core/wplace-api.js";
 import { initializeLanguage, getSection, t, getCurrentLanguage } from "../locales/index.js";
+import { isPaletteOpen, findAndClickPaintButton } from "../core/dom.js";
+import { sleep } from "../core/timing.js";
 
 export async function runImage() {
   log('🚀 Iniciando WPlace Auto-Image (versión modular)');
@@ -17,6 +19,24 @@ export async function runImage() {
   window.__wplaceBot = { ...window.__wplaceBot, imageRunning: true };
 
   let currentUserInfo = null; // Variable global para información del usuario
+  let originalFetch = window.fetch; // Guardar fetch original globalmente
+  
+  // Función para restaurar fetch original de forma segura
+  const restoreFetch = () => {
+    if (window.fetch !== originalFetch) {
+      window.fetch = originalFetch;
+      log('🔄 Fetch original restaurado');
+    }
+    if (imageState.positionTimeoutId) {
+      clearTimeout(imageState.positionTimeoutId);
+      imageState.positionTimeoutId = null;
+    }
+    if (imageState.cleanupObserver) {
+      imageState.cleanupObserver();
+      imageState.cleanupObserver = null;
+    }
+    imageState.selectingPosition = false;
+  };
 
   try {
     // Inicializar configuración
@@ -39,47 +59,106 @@ export async function runImage() {
       }
     }
 
+    // Función para auto-inicio del bot
+    async function tryAutoInit() {
+      log('🤖 Intentando auto-inicio...');
+      
+      // Verificar si la paleta ya está abierta
+      if (isPaletteOpen()) {
+        log('🎨 Paleta de colores ya está abierta');
+        return true;
+      }
+      
+      log('🔍 Paleta no encontrada, buscando botón Paint...');
+      
+      // Intentar hacer clic en el botón Paint
+      if (findAndClickPaintButton()) {
+        log('👆 Botón Paint encontrado y presionado');
+        
+        // Esperar un momento para que la paleta se abra
+        await sleep(2000);
+        
+        // Verificar si la paleta se abrió
+        if (isPaletteOpen()) {
+          log('✅ Paleta abierta exitosamente');
+          return true;
+        } else {
+          log('❌ La paleta no se abrió después de hacer clic');
+          return false;
+        }
+      } else {
+        log('❌ Botón Paint no encontrado');
+        return false;
+      }
+    }
+
+    // Función para inicializar el bot (usada tanto para auto-inicio como inicio manual)
+    async function initializeBot(isAutoInit = false) {
+      log('🤖 Inicializando Auto-Image...');
+      
+      // Verificar colores disponibles
+      ui.setStatus(t('image.checkingColors'), 'info');
+      const colors = detectAvailableColors();
+      
+      if (colors.length === 0) {
+        ui.setStatus(t('image.noColorsFound'), 'error');
+        return false;
+      }
+      
+      // Obtener información del usuario
+      const sessionInfo = await getSession();
+      let userInfo = null;
+      if (sessionInfo.success && sessionInfo.data.user) {
+        userInfo = {
+          username: sessionInfo.data.user.name || 'Anónimo',
+          charges: sessionInfo.data.charges,
+          maxCharges: sessionInfo.data.maxCharges,
+          pixels: sessionInfo.data.user.pixelsPainted || 0  // Usar pixelsPainted en lugar de pixels
+        };
+        currentUserInfo = userInfo; // Actualizar variable global
+        imageState.currentCharges = sessionInfo.data.charges;
+        imageState.maxCharges = sessionInfo.data.maxCharges || 50; // Guardar maxCharges en state
+        log(`👤 Usuario conectado: ${sessionInfo.data.user.name || 'Anónimo'} - Cargas: ${userInfo.charges}/${userInfo.maxCharges} - Píxeles: ${userInfo.pixels}`);
+      } else {
+        log('⚠️ No se pudo obtener información del usuario');
+      }
+      
+      imageState.availableColors = colors;
+      imageState.colorsChecked = true;
+      
+      ui.setStatus(t('image.colorsFound', { count: colors.length }), 'success');
+      ui.updateProgress(0, 0, userInfo);
+      
+      // Solo mostrar log una vez (evitar duplicado en auto-inicio)
+      if (!isAutoInit) {
+        log(`✅ ${colors.length} colores disponibles detectados`);
+      }
+      
+      // Marcar como inicializado exitosamente para deshabilitar el botón
+      ui.setInitialized(true);
+      
+      // Habilitar botones de upload y load progress
+      ui.enableButtonsAfterInit();
+      
+      return true;
+    }
+
     // Crear interfaz de usuario
     const ui = await createImageUI({
       texts,
-      onInitBot: async () => {
-        log('🤖 Inicializando Auto-Image...');
-        
-        // Verificar colores disponibles
-        ui.setStatus(t('image.checkingColors'), 'info');
-        const colors = detectAvailableColors();
-        
-        if (colors.length === 0) {
-          ui.setStatus(t('image.noColorsFound'), 'error');
-          return false;
+      
+      onConfigChange: (config) => {
+        // Manejar cambios de configuración
+        if (config.pixelsPerBatch !== undefined) {
+          imageState.pixelsPerBatch = config.pixelsPerBatch;
         }
-        
-        // Obtener información del usuario
-        const sessionInfo = await getSession();
-        let userInfo = null;
-        if (sessionInfo.success && sessionInfo.data.user) {
-          userInfo = {
-            username: sessionInfo.data.user.name || 'Anónimo',
-            charges: sessionInfo.data.charges,
-            maxCharges: sessionInfo.data.maxCharges,
-            pixels: sessionInfo.data.user.pixelsPainted || 0  // Usar pixelsPainted en lugar de pixels
-          };
-          currentUserInfo = userInfo; // Actualizar variable global
-          imageState.currentCharges = sessionInfo.data.charges;
-          log(`👤 Usuario conectado: ${sessionInfo.data.user.name || 'Anónimo'} - Cargas: ${userInfo.charges}/${userInfo.maxCharges} - Píxeles: ${userInfo.pixels}`);
-        } else {
-          log('⚠️ No se pudo obtener información del usuario');
+        if (config.useAllCharges !== undefined) {
+          imageState.useAllChargesFirst = config.useAllCharges;
         }
-        
-        imageState.availableColors = colors;
-        imageState.colorsChecked = true;
-        
-        ui.setStatus(t('image.colorsFound', { count: colors.length }), 'success');
-        ui.updateProgress(0, 0, userInfo);
-        log(`✅ ${colors.length} colores disponibles detectados`);
-        
-        return true;
+        log(`Configuración actualizada:`, config);
       },
+      
+      onInitBot: initializeBot,
       
       onUploadImage: async (file) => {
         try {
@@ -123,57 +202,132 @@ export async function runImage() {
           ui.setStatus(t('image.waitingPosition'), 'info');
           
           imageState.selectingPosition = true;
+          let positionCaptured = false;
           
-          // Interceptar requests para capturar posición
-          const originalFetch = window.fetch;
-          window.fetch = async (url, options) => {
-            if (imageState.selectingPosition && url.includes('/s0/paint')) {
-              try {
-                const response = await originalFetch(url, options);
+          // Método 1: Interceptar fetch (método original mejorado)
+          const setupFetchInterception = () => {
+            window.fetch = async (url, options) => {
+              // Solo interceptar requests específicos de pintado cuando estamos seleccionando posición
+              if (imageState.selectingPosition && 
+                  !positionCaptured &&
+                  typeof url === 'string' && 
+                  url.includes('/s0/pixel/') && 
+                  options && 
+                  options.method === 'POST') {
                 
-                if (response.ok && options.body) {
-                  const bodyData = JSON.parse(options.body);
-                  if (bodyData.coords && bodyData.coords.length >= 2) {
-                    const localX = bodyData.coords[0];
-                    const localY = bodyData.coords[1];
-                    
-                    // Extraer tile de la URL
-                    const tileMatch = url.match(/\/s0\/pixel\/(-?\d+)\/(-?\d+)/);
-                    if (tileMatch) {
-                      imageState.tileX = parseInt(tileMatch[1]);
-                      imageState.tileY = parseInt(tileMatch[2]);
+                try {
+                  log(`🎯 Interceptando request de pintado: ${url}`);
+                  
+                  const response = await originalFetch(url, options);
+                  
+                  if (response.ok && options.body) {
+                    let bodyData;
+                    try {
+                      bodyData = JSON.parse(options.body);
+                    } catch (parseError) {
+                      log('Error parseando body del request:', parseError);
+                      return response;
                     }
                     
-                    imageState.startPosition = { x: localX, y: localY };
-                    imageState.selectingPosition = false;
-                    
-                    window.fetch = originalFetch;
-                    
-                    ui.setStatus(t('image.positionSet'), 'success');
-                    log(`✅ Posición establecida: tile(${imageState.tileX},${imageState.tileY}) local(${localX},${localY})`);
-                    
-                    resolve(true);
+                    if (bodyData.coords && Array.isArray(bodyData.coords) && bodyData.coords.length >= 2) {
+                      const localX = bodyData.coords[0];
+                      const localY = bodyData.coords[1];
+                      
+                      // Extraer tile de la URL de forma más robusta
+                      const tileMatch = url.match(/\/s0\/pixel\/(-?\d+)\/(-?\d+)/);
+                      if (tileMatch && !positionCaptured) {
+                        positionCaptured = true;
+                        imageState.tileX = parseInt(tileMatch[1]);
+                        imageState.tileY = parseInt(tileMatch[2]);
+                        
+                        imageState.startPosition = { x: localX, y: localY };
+                        imageState.selectingPosition = false;
+                        
+                        // Restaurar fetch original inmediatamente
+                        restoreFetch();
+                        
+                        ui.setStatus(t('image.positionSet'), 'success');
+                        log(`✅ Posición establecida: tile(${imageState.tileX},${imageState.tileY}) local(${localX},${localY})`);
+                        
+                        resolve(true);
+                      } else {
+                        log('⚠️ No se pudo extraer tile de la URL:', url);
+                      }
+                    }
+                  }
+                  
+                  return response;
+                } catch (error) {
+                  log('❌ Error interceptando pixel:', error);
+                  // En caso de error, restaurar fetch y continuar con el original
+                  if (!positionCaptured) {
+                    restoreFetch();
+                    return originalFetch(url, options);
                   }
                 }
-                
-                return response;
-              } catch (error) {
-                log('Error interceptando pixel:', error);
-                return originalFetch(url, options);
               }
-            }
-            return originalFetch(url, options);
+              
+              // Para todos los demás requests, usar fetch original
+              return originalFetch(url, options);
+            };
           };
           
-          // Timeout para selección de posición
-          setTimeout(() => {
-            if (imageState.selectingPosition) {
-              window.fetch = originalFetch;
-              imageState.selectingPosition = false;
+          // Método 2: Observer de canvas para detectar cambios visuales
+          const setupCanvasObserver = () => {
+            const canvasElements = document.querySelectorAll('canvas');
+            if (canvasElements.length === 0) {
+              log('⚠️ No se encontraron elementos canvas');
+              return;
+            }
+            
+            log(`📊 Configurando observer para ${canvasElements.length} canvas`);
+            
+            // Escuchar eventos de click en el documento para detectar pintado
+            const clickHandler = (event) => {
+              if (!imageState.selectingPosition || positionCaptured) return;
+              
+              // Verificar si el click fue en un canvas
+              const target = event.target;
+              if (target && target.tagName === 'CANVAS') {
+                log('🖱️ Click detectado en canvas durante selección');
+                
+                // Dar tiempo para que se procese el pintado
+                setTimeout(() => {
+                  if (!positionCaptured && imageState.selectingPosition) {
+                    log('🔍 Buscando requests recientes de pintado...');
+                    // El fetch interceptor manejará la captura
+                  }
+                }, 500);
+              }
+            };
+            
+            document.addEventListener('click', clickHandler);
+            
+            // Limpiar observer al finalizar
+            imageState.cleanupObserver = () => {
+              document.removeEventListener('click', clickHandler);
+            };
+          };
+          
+          // Configurar ambos métodos
+          setupFetchInterception();
+          setupCanvasObserver();
+          
+          // Timeout para selección de posición con cleanup mejorado
+          const timeoutId = setTimeout(() => {
+            if (imageState.selectingPosition && !positionCaptured) {
+              restoreFetch();
+              if (imageState.cleanupObserver) {
+                imageState.cleanupObserver();
+              }
               ui.setStatus(t('image.positionTimeout'), 'error');
+              log('⏰ Timeout en selección de posición');
               resolve(false);
             }
           }, 120000); // 2 minutos
+          
+          // Guardar timeout para poder cancelarlo
+          imageState.positionTimeoutId = timeoutId;
         });
       },
       
@@ -196,6 +350,7 @@ export async function runImage() {
         
         imageState.running = true;
         imageState.stopFlag = false;
+        imageState.isFirstBatch = true; // Resetear flag de primera pasada
         
         ui.setStatus(t('image.startPaintingMsg'), 'success');
         
@@ -203,15 +358,32 @@ export async function runImage() {
           await processImage(
             imageState.imageData,
             imageState.startPosition,
-            // onProgress
-            (painted, total, message) => {
+            // onProgress - ahora incluye tiempo estimado
+            (painted, total, message, estimatedTime) => {
               // Actualizar cargas en userInfo si existe
               if (currentUserInfo) {
                 currentUserInfo.charges = Math.floor(imageState.currentCharges);
+                if (estimatedTime !== undefined) {
+                  currentUserInfo.estimatedTime = estimatedTime;
+                }
               }
+              
               ui.updateProgress(painted, total, currentUserInfo);
+              
+              // Actualizar display de cooldown si hay cooldown activo
+              if (imageState.inCooldown && imageState.nextBatchCooldown > 0) {
+                ui.updateCooldownDisplay(imageState.nextBatchCooldown);
+              } else {
+                ui.updateCooldownDisplay(0);
+              }
+              
               if (message) {
-                ui.setStatus(message, 'info');
+                // Usar función optimizada para mensajes de cooldown para evitar parpadeo
+                if (message.includes('⏳') && imageState.inCooldown) {
+                  ui.updateCooldownMessage(message);
+                } else {
+                  ui.setStatus(message, 'info');
+                }
               } else {
                 ui.setStatus(t('image.paintingProgress', { painted, total }), 'info');
               }
@@ -358,6 +530,9 @@ export async function runImage() {
 
     // Cleanup al cerrar la página
     window.addEventListener('beforeunload', () => {
+      // Restaurar fetch original si está interceptado
+      restoreFetch();
+      
       stopPainting();
       ui.destroy();
       window.removeEventListener('launcherLanguageChanged', handleLauncherLanguageChange);
@@ -368,6 +543,37 @@ export async function runImage() {
     });
 
     log('✅ Auto-Image inicializado correctamente');
+    
+    // Intentar auto-inicio después de que la UI esté lista
+    setTimeout(async () => {
+      try {
+        ui.setStatus(t('image.autoInitializing'), 'info');
+        log('🤖 Intentando auto-inicio...');
+        
+        const autoInitSuccess = await tryAutoInit();
+        
+        if (autoInitSuccess) {
+          ui.setStatus(t('image.autoInitSuccess'), 'success');
+          log('✅ Auto-inicio exitoso');
+          
+          // Ocultar el botón de inicialización manual
+          ui.setInitButtonVisible(false);
+          
+          // Ejecutar la lógica de inicialización del bot
+          const initResult = await initializeBot(true); // true = es auto-inicio
+          if (initResult) {
+            log('🚀 Bot auto-iniciado completamente');
+          }
+        } else {
+          ui.setStatus(t('image.autoInitFailed'), 'warning');
+          log('⚠️ Auto-inicio falló, se requiere inicio manual');
+          // El botón de inicio manual permanece visible
+        }
+      } catch (error) {
+        log('❌ Error en auto-inicio:', error);
+        ui.setStatus(t('image.manualInitRequired'), 'warning');
+      }
+    }, 1000); // Esperar 1 segundo para que la UI esté completamente cargada
     
   } catch (error) {
     log('❌ Error inicializando Auto-Image:', error);

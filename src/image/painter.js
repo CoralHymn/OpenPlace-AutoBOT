@@ -3,6 +3,7 @@ import { sleep } from "../core/timing.js";
 import { postPixelBatchImage } from "../core/wplace-api.js";
 import { getTurnstileToken } from "../core/turnstile.js";
 import { imageState, IMAGE_DEFAULTS } from "./config.js";
+import { t } from "../locales/index.js";
 
 export async function processImage(imageData, startPosition, onProgress, onComplete, onError) {
   const { width, height } = imageData;
@@ -30,12 +31,29 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
   try {
     while (imageState.remainingPixels.length > 0 && !imageState.stopFlag) {
       // Verificar cargas disponibles
-      const availableCharges = Math.floor(imageState.currentCharges);
-      const pixelsPerBatch = Math.min(imageState.pixelsPerBatch, imageState.remainingPixels.length);
+      let availableCharges = Math.floor(imageState.currentCharges);
+      
+      // Determinar tamaño del lote basado en configuración
+      let pixelsPerBatch;
+      if (imageState.isFirstBatch && imageState.useAllChargesFirst && availableCharges > 0) {
+        // Primera pasada: usar todas las cargas disponibles
+        pixelsPerBatch = Math.min(availableCharges, imageState.remainingPixels.length);
+        imageState.isFirstBatch = false; // Marcar que ya no es la primera pasada
+        log(`Primera pasada: usando ${pixelsPerBatch} cargas de ${availableCharges} disponibles`);
+      } else {
+        // Pasadas siguientes: usar configuración normal
+        pixelsPerBatch = Math.min(imageState.pixelsPerBatch, imageState.remainingPixels.length);
+      }
       
       if (availableCharges < pixelsPerBatch) {
         log(`Cargas insuficientes: ${availableCharges}/${pixelsPerBatch} necesarias`);
         await waitForCooldown(pixelsPerBatch - availableCharges, onProgress);
+        // Volver a verificar cargas después del cooldown
+        availableCharges = Math.floor(imageState.currentCharges);
+        // Recalcular el tamaño del lote si es necesario
+        if (!imageState.isFirstBatch) {
+          pixelsPerBatch = Math.min(imageState.pixelsPerBatch, imageState.remainingPixels.length, availableCharges);
+        }
         continue;
       }
       
@@ -44,11 +62,15 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
       
       log(`Pintando lote de ${batch.length} píxeles...`);
       
-      // Pintar el lote
-      const result = await paintPixelBatch(batch);
+      // Pintar el lote con sistema de reintentos
+      const result = await paintPixelBatchWithRetry(batch, onProgress);
       
       if (result.success && result.painted > 0) {
         imageState.paintedPixels += result.painted;
+        
+        // Actualizar cargas consumidas
+        imageState.currentCharges = Math.max(0, imageState.currentCharges - result.painted);
+        log(`Cargas después del lote: ${imageState.currentCharges.toFixed(1)} (consumidas: ${result.painted})`);
         
         // Actualizar posición para continuar desde aquí si se interrumpe
         if (batch.length > 0) {
@@ -58,10 +80,28 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
         
         log(`Lote exitoso: ${result.painted}/${batch.length} píxeles pintados. Total: ${imageState.paintedPixels}/${imageState.totalPixels}`);
         
-        // Actualizar progreso
+        // Calcular tiempo estimado
+        const estimatedTime = calculateEstimatedTime();
+        
+        // Mostrar mensaje de confirmación de pasada completada
+        const progressPercent = ((imageState.paintedPixels / imageState.totalPixels) * 100).toFixed(1);
+        const successMessage = t('image.passCompleted', {
+          painted: result.painted,
+          percent: progressPercent,
+          current: imageState.paintedPixels,
+          total: imageState.totalPixels
+        });
+        
+        // Actualizar progreso con mensaje de éxito
         if (onProgress) {
-          onProgress(imageState.paintedPixels, imageState.totalPixels);
+          onProgress(imageState.paintedPixels, imageState.totalPixels, successMessage, estimatedTime);
         }
+        
+        // Pausa para que el usuario vea el mensaje de éxito antes del cooldown
+        await sleep(2000);
+      } else if (result.shouldContinue) {
+        // Si el sistema de reintentos falló pero debe continuar
+        log(`Lote falló después de todos los reintentos, continuando con siguiente lote...`);
       } else {
         // En caso de fallo, devolver el lote a la cola
         imageState.remainingPixels.unshift(...batch);
@@ -147,21 +187,195 @@ export async function paintPixelBatch(batch) {
   }
 }
 
+// Función de pintado con sistema de reintentos (adaptado del Auto-Farm)
+export async function paintPixelBatchWithRetry(batch, onProgress) {
+  const maxAttempts = 5; // 5 intentos como en el Farm
+  const baseDelay = 3000; // Delay base de 3 segundos
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await paintPixelBatch(batch);
+      
+      if (result.success) {
+        imageState.retryCount = 0; // Reset en éxito
+        return result;
+      }
+      
+      imageState.retryCount = attempt;
+      
+      if (attempt < maxAttempts) {
+        const delay = baseDelay * Math.pow(2, attempt - 1); // Backoff exponencial
+        const delaySeconds = Math.round(delay / 1000);
+        
+        // Determinar tipo de error para mensaje específico
+        let errorMessage;
+        if (result.status === 0 || result.status === 'NetworkError') {
+          errorMessage = t('image.networkError');
+        } else if (result.status >= 500) {
+          errorMessage = t('image.serverError');
+        } else if (result.status === 408) {
+          errorMessage = t('image.timeoutError');
+        } else {
+          errorMessage = t('image.retryAttempt', { 
+            attempt, 
+            maxAttempts, 
+            delay: delaySeconds 
+          });
+        }
+        
+        if (onProgress) {
+          onProgress(imageState.paintedPixels, imageState.totalPixels, errorMessage);
+        }
+        
+        log(`Reintento ${attempt}/${maxAttempts} después de ${delaySeconds}s. Error: ${result.error}`);
+        await sleep(delay);
+      }
+      
+    } catch (error) {
+      log(`Error en intento ${attempt}:`, error);
+      imageState.retryCount = attempt;
+      
+      if (attempt < maxAttempts) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        const delaySeconds = Math.round(delay / 1000);
+        
+        const errorMessage = t('image.retryError', { 
+          attempt, 
+          maxAttempts, 
+          delay: delaySeconds 
+        });
+        
+        if (onProgress) {
+          onProgress(imageState.paintedPixels, imageState.totalPixels, errorMessage);
+        }
+        
+        await sleep(delay);
+      }
+    }
+  }
+  
+  imageState.retryCount = maxAttempts;
+  const failMessage = t('image.retryFailed', { maxAttempts });
+  
+  if (onProgress) {
+    onProgress(imageState.paintedPixels, imageState.totalPixels, failMessage);
+  }
+  
+  log(`Falló después de ${maxAttempts} intentos, continuando con siguiente lote`);
+  
+  // Retornar un resultado de fallo que permita continuar
+  return {
+    success: false,
+    painted: 0,
+    error: `Falló después de ${maxAttempts} intentos`,
+    shouldContinue: true // Indica que debe continuar con el siguiente lote
+  };
+}
+
+export async function paintPixelBatch_ORIGINAL(batch) {
+  try {
+    if (!batch || batch.length === 0) {
+      return { success: false, painted: 0, error: 'Lote vacío' };
+    }
+    
+    // Convertir el lote al formato esperado por la API
+    const coords = [];
+    const colors = [];
+    let tileX = null;
+    let tileY = null;
+    
+    for (const pixel of batch) {
+      coords.push(pixel.localX, pixel.localY);
+      colors.push(pixel.color.id || pixel.color.value || 1);
+      
+      // Tomar tileX/tileY del primer píxel (todos deberían tener el mismo tile)
+      if (tileX === null) {
+        tileX = pixel.tileX;
+        tileY = pixel.tileY;
+      }
+    }
+    
+    // Obtener token de Turnstile
+    const token = await getTurnstileToken(IMAGE_DEFAULTS.SITEKEY);
+    
+    // Enviar píxeles usando el formato correcto
+    const response = await postPixelBatchImage(tileX, tileY, coords, colors, token);
+    
+    if (response.status === 200) {
+      return {
+        success: true,
+        painted: response.painted,
+        response: response.json
+      };
+    } else {
+      return {
+        success: false,
+        painted: 0,
+        error: response.json?.message || `HTTP ${response.status}`,
+        status: response.status
+      };
+    }
+  } catch (error) {
+    log('Error en paintPixelBatch:', error);
+    return {
+      success: false,
+      painted: 0,
+      error: error.message
+    };
+  }
+}
+
 async function waitForCooldown(chargesNeeded, onProgress) {
   const chargeTime = IMAGE_DEFAULTS.CHARGE_REGEN_MS * chargesNeeded;
-  const waitTime = Math.min(chargeTime, 60000); // Máximo 1 minuto de espera
+  const waitTime = chargeTime + 5000; // Tiempo necesario + 5 segundos de seguridad
   
   log(`Esperando ${Math.round(waitTime/1000)}s para obtener ${chargesNeeded} cargas`);
   
+  // Actualizar estado de cooldown
+  imageState.inCooldown = true;
+  imageState.cooldownEndTime = Date.now() + waitTime;
+  imageState.nextBatchCooldown = Math.round(waitTime / 1000);
+  
   if (onProgress) {
-    onProgress(imageState.paintedPixels, imageState.totalPixels, `Esperando cargas (${Math.round(waitTime/1000)}s)`);
+    const minutes = Math.floor(waitTime / 60000);
+    const seconds = Math.floor((waitTime % 60000) / 1000);
+    const timeText = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+    const message = t('image.waitingChargesRegen', {
+      current: Math.floor(imageState.currentCharges),
+      needed: chargesNeeded,
+      time: timeText
+    });
+    onProgress(imageState.paintedPixels, imageState.totalPixels, message);
   }
   
-  await sleep(waitTime);
+  // Contar hacia atrás
+  for (let i = Math.round(waitTime/1000); i > 0; i--) {
+    if (imageState.stopFlag) break;
+    
+    imageState.nextBatchCooldown = i;
+    
+    // Solo actualizar el mensaje cada 5 segundos o en los últimos 10 segundos para reducir parpadeo
+    if (onProgress && (i % 5 === 0 || i <= 10 || i === Math.round(waitTime/1000))) {
+      const minutes = Math.floor(i / 60);
+      const seconds = i % 60;
+      const timeText = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+      const message = t('image.waitingChargesCountdown', {
+        current: Math.floor(imageState.currentCharges),
+        needed: chargesNeeded,
+        time: timeText
+      });
+      onProgress(imageState.paintedPixels, imageState.totalPixels, message);
+    }
+    
+    await sleep(1000);
+  }
+  
+  imageState.inCooldown = false;
+  imageState.nextBatchCooldown = 0;
   
   // Simular regeneración de cargas
   imageState.currentCharges = Math.min(
-    50, // máximo de cargas
+    imageState.maxCharges || 50, // usar maxCharges del estado
     imageState.currentCharges + (waitTime / IMAGE_DEFAULTS.CHARGE_REGEN_MS)
   );
 }
@@ -190,6 +404,30 @@ function generatePixelQueue(imageData, startPosition, tileX, tileY) {
   log(`Cola de píxeles generada: ${queue.length} píxeles para pintar`);
   return queue;
 }
+
+function calculateEstimatedTime() {
+  if (!imageState.remainingPixels || imageState.remainingPixels.length === 0) {
+    return 0;
+  }
+  
+  const remainingPixels = imageState.remainingPixels.length;
+  const batchSize = imageState.pixelsPerBatch;
+  const chargeRegenTime = IMAGE_DEFAULTS.CHARGE_REGEN_MS / 1000; // en segundos
+  
+  // Calcular número de lotes necesarios
+  const batchesNeeded = Math.ceil(remainingPixels / batchSize);
+  
+  // Tiempo de espera entre lotes (cada píxel necesita 1 carga, cada carga tarda 30s)
+  const waitTimeBetweenBatches = batchSize * chargeRegenTime;
+  
+  // Tiempo total estimado
+  const totalWaitTime = (batchesNeeded - 1) * waitTimeBetweenBatches;
+  const executionTime = batchesNeeded * 2; // ~2 segundos por lote de ejecución
+  
+  return Math.ceil(totalWaitTime + executionTime);
+}
+
+export { calculateEstimatedTime };
 
 export function stopPainting() {
   imageState.stopFlag = true;
