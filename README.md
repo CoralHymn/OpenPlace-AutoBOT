@@ -352,6 +352,20 @@ Los bots se actualizan automáticamente al ejecutar el bookmarklet. Siempre obti
 
 ---
 
+## 🤝 Contribuir
+
+¿Quieres contribuir al proyecto? ¡Genial! 
+
+👉 **[Consulta la guía completa de contribución](docs/CONTRIBUTING.md)**
+
+Incluye:
+- 🏗️ Estructura del proyecto y arquitectura
+- 🔧 Scripts de desarrollo y build
+- 📝 Estándares de código y commits
+- 🚀 Flujo de desarrollo paso a paso
+
+---
+
 <p align="center">
   <strong>🎨 Hecho con ❤️ para la comunidad de WPlace</strong><br>
   <em>Usa responsablemente y disfruta creando arte píxel a píxel</em>
