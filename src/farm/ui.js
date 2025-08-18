@@ -4,7 +4,7 @@ import { saveFarmCfg, loadFarmCfg, resetFarmCfg } from "../core/storage.js";
 import { dragHeader, clamp } from "../core/utils.js";
 import { t } from "../locales/index.js";
 
-export function createFarmUI(config, onStart, onStop, onCalibrate) {
+export function createFarmUI(config, onStart, onStop) {
   const shadowHost = document.createElement('div');
   shadowHost.id = 'wplace-farm-ui';
   shadowHost.style.cssText = `
@@ -172,14 +172,6 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
     
     .wplace-button.stop:hover:not(:disabled) {
       background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
-    }
-    
-    .wplace-button.calibrate {
-      background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);
-    }
-    
-    .wplace-button.calibrate:hover {
-      background: linear-gradient(135deg, #dd6b20 0%, #c05621 100%);
     }
     
     .wplace-button.small {
@@ -353,7 +345,6 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
         <div class="wplace-buttons">
           <button class="wplace-button start" id="start-btn">▶️ ${t('farm.start')}</button>
           <button class="wplace-button stop" id="stop-btn" disabled>⏹️ ${t('farm.stop')}</button>
-          <button class="wplace-button calibrate" id="calibrate-btn">🎯 ${t('farm.calibrate')}</button>
           <button class="wplace-button small" id="select-position-btn">🌍 ${t('farm.selectPosition')}</button>
           <button class="wplace-button small" id="once-btn">🎨 ${t('farm.paintOnce')}</button>
         </div>
@@ -461,7 +452,6 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
     tilePos: shadow.getElementById('tile-pos'),
     startBtn: shadow.getElementById('start-btn'),
     stopBtn: shadow.getElementById('stop-btn'),
-    calibrateBtn: shadow.getElementById('calibrate-btn'),
     selectPositionBtn: shadow.getElementById('select-position-btn'),
     onceBtn: shadow.getElementById('once-btn'),
     zoneInfo: shadow.getElementById('zone-info'),
@@ -581,11 +571,9 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
     updateButtonStates(false);
   });
   
-  elements.calibrateBtn?.addEventListener('click', () => {
-    onCalibrate();
-  });
-  
   elements.onceBtn?.addEventListener('click', () => {
+    // Asegurar que inputs reflejan la última captura/calibración
+    updateInputsFromConfig();
     updateConfigFromInputs();
     // Llamar a la función de pintar una vez si existe
     if (window.WPAUI && window.WPAUI.once) {
@@ -712,7 +700,6 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
     // Actualizar botones
     if (elements.startBtn) elements.startBtn.innerHTML = `▶️ ${t('farm.start')}`;
     if (elements.stopBtn) elements.stopBtn.innerHTML = `⏹️ ${t('farm.stop')}`;
-    if (elements.calibrateBtn) elements.calibrateBtn.innerHTML = `🎯 ${t('farm.calibrate')}`;
     if (elements.selectPositionBtn) elements.selectPositionBtn.innerHTML = `🌍 ${t('farm.selectPosition')}`;
     if (elements.onceBtn) elements.onceBtn.innerHTML = `🎨 ${t('farm.paintOnce')}`;
     
@@ -816,9 +803,12 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
                 config.selectingPosition = false;
                 window.fetch = originalFetch;
                 
-                // Actualizar displays
+                // Actualizar displays y sincronizar inputs con la nueva config
                 updateZoneDisplay();
                 updateTileDisplay();
+                // MUY IMPORTANTE: sincronizar los inputs para que 'updateConfigFromInputs()'
+                // no sobreescriba el TILE_X/TILE_Y con valores antiguos al pulsar "Una vez"/"Iniciar"
+                updateInputsFromConfig();
                 
                 setStatus(t('farm.positionSet'), 'success');
                 log(`✅ Zona de farming establecida: tile(${config.TILE_X},${config.TILE_Y}) base(${localX},${localY}) radio(${config.FARM_RADIUS}px)`);
@@ -874,6 +864,12 @@ export function createFarmUI(config, onStart, onStop, onCalibrate) {
 export async function autoCalibrateTile(config) {
   try {
     log('🎯 Iniciando auto-calibración del tile...');
+    // Si ya hay una zona seleccionada y un tile definido, no forzar nueva calibración
+    if (config.POSITION_SELECTED && config.BASE_X != null && config.BASE_Y != null && Number.isFinite(config.TILE_X) && Number.isFinite(config.TILE_Y)) {
+      log(`ℹ️ Ya existe zona seleccionada. Se mantiene tile actual: (${config.TILE_X}, ${config.TILE_Y})`);
+      saveFarmCfg(config);
+      return { tileX: config.TILE_X, tileY: config.TILE_Y, success: true };
+    }
     
     // Buscar elementos que indiquen la posición actual
     const urlParams = new window.URLSearchParams(window.location.search);
