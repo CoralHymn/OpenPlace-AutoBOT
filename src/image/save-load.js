@@ -40,6 +40,8 @@ export function saveProgress(filename = null) {
       })),
       remainingPixels: imageState.remainingPixels || []
     };
+
+    // Persistencia del overlay de imagen eliminada; el overlay de plan se infiere desde remainingPixels
     
     const dataStr = JSON.stringify(progressData, null, 2);
     const blob = new window.Blob([dataStr], { type: 'application/json' });
@@ -126,6 +128,34 @@ export async function loadProgress(file) {
           
           // Manejar remainingPixels tanto en progress como en raíz
           imageState.remainingPixels = progressData.remainingPixels || progressData.progress.remainingPixels || [];
+
+          // Actualizar overlay del plan con los píxeles restantes (si los hay)
+          try {
+            if (window.__WPA_PLAN_OVERLAY__) {
+              window.__WPA_PLAN_OVERLAY__.injectStyles();
+              window.__WPA_PLAN_OVERLAY__.setEnabled(true); // Activar automáticamente al cargar progreso
+              
+              // Configurar ancla si tenemos posición de inicio
+              if (imageState.startPosition && imageState.tileX !== undefined && imageState.tileY !== undefined) {
+                window.__WPA_PLAN_OVERLAY__.setAnchor({
+                  tileX: imageState.tileX,
+                  tileY: imageState.tileY,
+                  pxX: imageState.startPosition.x,
+                  pxY: imageState.startPosition.y
+                });
+                log(`✅ Plan overlay anclado con posición cargada: tile(${imageState.tileX},${imageState.tileY}) local(${imageState.startPosition.x},${imageState.startPosition.y})`);
+              }
+              
+              window.__WPA_PLAN_OVERLAY__.setPlan(imageState.remainingPixels, {
+                enabled: true,
+                nextBatchCount: imageState.pixelsPerBatch
+              });
+              
+              log(`✅ Plan overlay activado con ${imageState.remainingPixels.length} píxeles restantes`);
+            }
+          } catch (e) {
+            log('⚠️ Error activando plan overlay al cargar progreso:', e);
+          }
           
           if (progressData.config) {
             imageState.pixelsPerBatch = progressData.config.pixelsPerBatch || imageState.pixelsPerBatch;
@@ -139,6 +169,8 @@ export async function loadProgress(file) {
           // Marcar como imagen cargada y listo para continuar
           imageState.imageLoaded = true;
           imageState.colorsChecked = true;
+
+          // Ya no se restaura overlay de imagen; el overlay de plan se llena más abajo
           
           log(`✅ Progreso cargado: ${imageState.paintedPixels}/${imageState.totalPixels} píxeles`);
           

@@ -1,6 +1,6 @@
 import { log } from "../core/logger.js";
 import { imageState, IMAGE_DEFAULTS } from "./config.js";
-import { ImageProcessor, detectAvailableColors } from "./processor.js";
+import { BlueMarblelImageProcessor, detectAvailableColors } from "./blue-marble-processor.js";
 import { processImage, stopPainting } from "./painter.js";
 import { saveProgress, loadProgress, clearProgress, getProgressInfo } from "./save-load.js";
 import { createImageUI, showConfirmDialog } from "./ui.js";
@@ -8,6 +8,7 @@ import { getSession } from "../core/wplace-api.js";
 import { initializeLanguage, getSection, t, getCurrentLanguage } from "../locales/index.js";
 import { isPaletteOpen, findAndClickPaintButton } from "../core/dom.js";
 import { sleep } from "../core/timing.js";
+import "./plan-overlay-blue-marble.js";
 
 export async function runImage() {
   log('🚀 Iniciando WPlace Auto-Image (versión modular)');
@@ -139,6 +140,13 @@ export async function runImage() {
       
       // Habilitar botones de upload y load progress
       ui.enableButtonsAfterInit();
+
+      // Inicializar plan overlay si ya hay cola previa (p.ej. reanudación)
+      try {
+    // Removed references to __WPA_PLAN_OVERLAY__
+      } catch {
+        // noop
+      }
       
       return true;
     }
@@ -165,28 +173,55 @@ export async function runImage() {
           ui.setStatus(t('image.loadingImage'), 'info');
           
           const imageUrl = window.URL.createObjectURL(file);
-          const processor = new ImageProcessor(imageUrl);
+          const processor = new BlueMarblelImageProcessor(imageUrl);
           processor.originalName = file.name;
           
           await processor.load();
           
-          // Procesar imagen con colores disponibles
-          const processedData = processor.processImage(imageState.availableColors, config);
+          // Inicializar paleta de colores Blue Marble
+          const availableColors = processor.initializeColorPalette();
+          imageState.availableColors = availableColors;
+          
+          // Analizar píxeles de la imagen
+          const analysisResult = await processor.analyzePixels();
+          
+          // Establecer coordenadas base (se actualizarán al seleccionar posición)
+          processor.setCoords(0, 0, 0, 0);
+          
+          // Obtener datos de imagen procesados
+          const processedData = processor.getImageData();
           
           imageState.imageData = processedData;
           imageState.imageData.processor = processor; // Guardar referencia al processor para resize
-          imageState.totalPixels = processedData.validPixelCount;
+          imageState.totalPixels = analysisResult.requiredPixels;
           imageState.paintedPixels = 0;
           imageState.originalImageName = file.name;
           imageState.imageLoaded = true;
           
-          ui.setStatus(t('image.imageLoaded', { count: processedData.validPixelCount }), 'success');
-          ui.updateProgress(0, processedData.validPixelCount, currentUserInfo);
+          ui.setStatus(t('image.imageLoaded', { count: analysisResult.requiredPixels }), 'success');
+          ui.updateProgress(0, analysisResult.requiredPixels, currentUserInfo);
           
-          log(`✅ Imagen cargada: ${processedData.width}x${processedData.height}, ${processedData.validPixelCount} píxeles válidos`);
+          log(`✅ [BLUE MARBLE] Imagen cargada: ${processedData.width}x${processedData.height}, ${analysisResult.requiredPixels} píxeles válidos`);
+          log(`✅ [BLUE MARBLE] Análisis: ${analysisResult.uniqueColors} colores únicos, ${analysisResult.defacePixels} píxeles #deface`);
           
-          // Limpiar URL temporal
+          // Limpiar URL temporal (el overlay usa un dataURL separado)
           window.URL.revokeObjectURL(imageUrl);
+
+          // Activar overlay de plan automáticamente cuando se carga imagen
+          try {
+            if (window.__WPA_PLAN_OVERLAY__) {
+              window.__WPA_PLAN_OVERLAY__.injectStyles();
+              window.__WPA_PLAN_OVERLAY__.setEnabled(true); // Activar automáticamente
+              // Configurar ancla base con la posición del tile (será ajustada al seleccionar posición)
+              window.__WPA_PLAN_OVERLAY__.setPlan([], {
+                enabled: true,
+                nextBatchCount: 0
+              });
+              log('✅ Plan overlay activado automáticamente al cargar imagen');
+            }
+          } catch (e) {
+            log('⚠️ Error activando plan overlay:', e);
+          }
           
           return true;
         } catch (error) {
@@ -237,11 +272,67 @@ export async function runImage() {
                       const tileMatch = url.match(/\/s0\/pixel\/(-?\d+)\/(-?\d+)/);
                       if (tileMatch && !positionCaptured) {
                         positionCaptured = true;
-                        imageState.tileX = parseInt(tileMatch[1]);
-                        imageState.tileY = parseInt(tileMatch[2]);
+                        const tileX = parseInt(tileMatch[1]);
+                        const tileY = parseInt(tileMatch[2]);
                         
+                        // Guardar coordenadas tile/pixel
+                        imageState.tileX = tileX;
+                        imageState.tileY = tileY;
                         imageState.startPosition = { x: localX, y: localY };
                         imageState.selectingPosition = false;
+                        
+                        // Actualizar coordenadas del procesador Blue Marble
+                        if (imageState.imageData && imageState.imageData.processor) {
+                          const processor = imageState.imageData.processor;
+                          processor.setCoords(tileX, tileY, localX, localY);
+                          
+                          // Generar tiles de template una vez que tenemos coordenadas
+                          try {
+                            await processor.createTemplateTiles();
+                            log(`✅ [BLUE MARBLE] Template tiles creados para posición tile(${tileX},${tileY}) pixel(${localX},${localY})`);
+                          } catch (error) {
+                            log(`❌ [BLUE MARBLE] Error creando template tiles: ${error.message}`);
+                          }
+                          
+                          // Regenerar cola de píxeles con coordenadas actualizadas
+                          const pixelQueue = processor.generatePixelQueue();
+                          imageState.remainingPixels = pixelQueue;
+                          imageState.totalPixels = pixelQueue.length;
+                          
+                          log(`✅ Cola de píxeles generada: ${pixelQueue.length} píxeles para overlay`);
+                        }
+                        
+                        // Configurar overlay del plan con la posición seleccionada
+                        try {
+                          if (window.__WPA_PLAN_OVERLAY__) {
+                            window.__WPA_PLAN_OVERLAY__.injectStyles();
+                            window.__WPA_PLAN_OVERLAY__.setEnabled(true);
+                            
+                            // Configurar ancla lógica (tile/pixel) para posicionamiento
+                            window.__WPA_PLAN_OVERLAY__.setAnchor({
+                              tileX: tileX,
+                              tileY: tileY,
+                              pxX: localX,
+                              pxY: localY
+                            });
+                            
+                            // Usar la cola de píxeles regenerada
+                            if (imageState.remainingPixels && imageState.remainingPixels.length > 0) {
+                              window.__WPA_PLAN_OVERLAY__.setPlan(imageState.remainingPixels, {
+                                anchor: { tileX: tileX, tileY: tileY, pxX: localX, pxY: localY },
+                                imageWidth: imageState.imageData.width,
+                                imageHeight: imageState.imageData.height,
+                                enabled: true
+                              });
+                              
+                              log(`✅ Plan overlay anclado en tile(${tileX},${tileY}) local(${localX},${localY})`);
+                            } else {
+                              log(`⚠️ No hay píxeles para mostrar en overlay`);
+                            }
+                          }
+                        } catch (error) {
+                          log(`❌ Error configurando overlay: ${error.message}`);
+                        }
                         
                         // Restaurar fetch original inmediatamente
                         restoreFetch();
@@ -290,6 +381,19 @@ export async function runImage() {
               const target = event.target;
               if (target && target.tagName === 'CANVAS') {
                 log('🖱️ Click detectado en canvas durante selección');
+                // Calcular coordenadas CSS relativas al contenedor del board para ancla CSS
+                try {
+                  const board = document.querySelector('canvas')?.parentElement || document.body;
+                  const rect = board.getBoundingClientRect();
+                  const cssX = event.clientX - rect.left;
+                  const cssY = event.clientY - rect.top;
+                  if (window.__WPA_PLAN_OVERLAY__) {
+                    window.__WPA_PLAN_OVERLAY__.setAnchorCss(cssX, cssY);
+                    log(`Plan overlay: ancla CSS establecida en (${cssX}, ${cssY})`);
+                  }
+                } catch (e) {
+                  log('Plan Overlay: error calculando ancla CSS', e);
+                }
                 
                 // Dar tiempo para que se procese el pintado
                 setTimeout(() => {
@@ -484,28 +588,66 @@ export async function runImage() {
         }
       },
       
-      onConfirmResize: (processor, newWidth, newHeight) => {
+      onConfirmResize: async (processor, newWidth, newHeight) => {
         log(`🔄 Redimensionando imagen de ${processor.getDimensions().width}x${processor.getDimensions().height} a ${newWidth}x${newHeight}`);
         
         try {
-          // Redimensionar la imagen
-          processor.resize(newWidth, newHeight);
+          // Redimensionar la imagen usando Blue Marble
+          await processor.resize(newWidth, newHeight);
           
-          // Recalcular píxeles válidos
-          const processedData = processor.processImage(imageState.availableColors, config);
+          // Reanalizar imagen con nuevo tamaño usando Blue Marble
+          const analysisResult = await processor.analyzePixels();
           
-          // Actualizar imageState
-          imageState.imageData = processedData;
-          imageState.totalPixels = processedData.validPixelCount;
+          // Actualizar imageState con resultados de Blue Marble
+          imageState.imageData = {
+            processor: processor,
+            width: newWidth,
+            height: newHeight,
+            validPixelCount: analysisResult.validPixelCount,
+            totalPixels: analysisResult.totalPixels,
+            unknownPixels: analysisResult.unknownPixels
+          };
+          
+          imageState.totalPixels = analysisResult.validPixelCount;
           imageState.paintedPixels = 0;
           imageState.remainingPixels = []; // Resetear cola al redimensionar
           imageState.lastPosition = { x: 0, y: 0 };
           
           // Actualizar UI
-          ui.updateProgress(0, processedData.validPixelCount, currentUserInfo);
+          ui.updateProgress(0, analysisResult.validPixelCount, currentUserInfo);
           ui.setStatus(t('image.resizeSuccess', { width: newWidth, height: newHeight }), 'success');
           
-          log(`✅ Imagen redimensionada: ${processedData.validPixelCount} píxeles válidos`);
+          log(`✅ Imagen redimensionada: ${analysisResult.validPixelCount} píxeles válidos de ${analysisResult.totalPixels} totales`);
+
+          // Actualizar overlay si ya hay posición seleccionada
+          try {
+            if (window.__WPA_PLAN_OVERLAY__ && imageState.startPosition && imageState.tileX != null && imageState.tileY != null) {
+              // Regenerar template tiles con nuevo tamaño
+              await processor.createTemplateTiles();
+              
+              // Regenerar cola de píxeles con Blue Marble
+              const pixelQueue = processor.generatePixelQueue();
+              imageState.remainingPixels = pixelQueue;
+              imageState.totalPixels = pixelQueue.length;
+              
+              // Actualizar overlay con nueva cola
+              window.__WPA_PLAN_OVERLAY__.setPlan(pixelQueue, {
+                anchor: { 
+                  tileX: imageState.tileX, 
+                  tileY: imageState.tileY, 
+                  pxX: imageState.startPosition.x, 
+                  pxY: imageState.startPosition.y 
+                },
+                imageWidth: newWidth,
+                imageHeight: newHeight,
+                enabled: true
+              });
+              
+              log(`✅ Overlay actualizado con ${pixelQueue.length} píxeles después del resize`);
+            }
+          } catch (overlayError) {
+            log(`⚠️ Error actualizando overlay después del resize: ${overlayError.message}`);
+          }
         } catch (error) {
           log(`❌ Error redimensionando imagen: ${error.message}`);
           ui.setStatus(t('image.imageError'), 'error');

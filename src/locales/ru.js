@@ -70,6 +70,7 @@ export const ru = {
     batchSize: "Размер прохода",
     nextBatchTime: "Следующий проход через",
     useAllCharges: "Использовать все доступные заряды",
+    showOverlay: "Показать наложение",
     maxCharges: "Максимальное кол-во зарядов за проход",
     waitingForCharges: "⏳ Ожидание зарядов: {current} из {needed}",
     timeRemaining: "Времени осталось",

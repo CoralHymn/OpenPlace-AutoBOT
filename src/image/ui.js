@@ -454,6 +454,12 @@ export async function createImageUI({ texts, ...handlers }) {
             ${texts.useAllCharges}
           </label>
         </div>
+        <div class="config-item">
+          <label>
+            <input class="config-checkbox show-overlay" type="checkbox" checked>
+            ${texts.showOverlay || 'Mostrar overlay'}
+          </label>
+        </div>
       </div>
       
       <!-- Configuración visible en la interfaz principal -->
@@ -579,6 +585,7 @@ export async function createImageUI({ texts, ...handlers }) {
     configPanel: container.querySelector('.config-panel'),
     pixelsPerBatch: container.querySelector('.pixels-per-batch'),
     useAllCharges: container.querySelector('.use-all-charges'),
+    showOverlay: container.querySelector('.show-overlay'),
     batchValue: container.querySelector('.batch-value'),
     cooldownValue: container.querySelector('.cooldown-value'),
     initBtn: container.querySelector('.init-btn'),
@@ -718,6 +725,14 @@ export async function createImageUI({ texts, ...handlers }) {
       }
       elements.selectPosBtn.disabled = false;
     }
+  });
+
+  // Checkbox mostrar overlay
+  elements.showOverlay.addEventListener('change', () => {
+    if (!window.__WPA_PLAN_OVERLAY__) return;
+    window.__WPA_PLAN_OVERLAY__.injectStyles();
+    const isEnabled = elements.showOverlay.checked;
+    window.__WPA_PLAN_OVERLAY__.setEnabled(isEnabled);
   });
   
   elements.startBtn.addEventListener('click', async () => {
