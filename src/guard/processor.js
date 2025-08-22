@@ -1,6 +1,6 @@
 import { log } from "../core/logger.js";
 import { postPixelBatchImage } from "../core/wplace-api.js";
-import { getTurnstileToken } from "../core/turnstile.js";
+import { ensureToken } from "../core/turnstile.js";
 import { guardState, GUARD_DEFAULTS } from "./config.js";
 import { sleep } from "../core/timing.js";
 
@@ -34,7 +34,7 @@ export function detectAvailableColors() {
     if (element.querySelector("svg")) continue;
     
     const colorId = parseInt(element.id.replace("color-", ""));
-    if (colorId === 0 || colorId === 5) continue; // Evitar colores especiales
+    if (colorId === 0) continue; // Evitar solo el color transparente (ID 0)
     
     const bgColor = element.style.backgroundColor;
     if (bgColor) {
@@ -190,10 +190,10 @@ export async function analyzeAreaPixels(area) {
         const localX = globalX - (tileX * GUARD_DEFAULTS.TILE_SIZE);
         const localY = globalY - (tileY * GUARD_DEFAULTS.TILE_SIZE);
         
-        // Usar color blanco por defecto (ID 1) para píxeles vacíos
+        // Usar color blanco por defecto (ID 5) para píxeles vacíos
         pixelMap.set(`${globalX},${globalY}`, {
           r: 255, g: 255, b: 255, // Blanco por defecto
-          colorId: 1, // ID del color blanco
+          colorId: 5, // ID correcto del color blanco
           globalX,
           globalY,
           localX,
@@ -397,7 +397,7 @@ export async function repairChanges(changes) {
 // Pintar múltiples píxeles en un solo tile
 async function paintPixelBatch(tileX, tileY, coords, colors) {
   try {
-    const token = await getTurnstileToken(GUARD_DEFAULTS.SITEKEY);
+    const token = await ensureToken();
     
     const response = await postPixelBatchImage(
       tileX, 
