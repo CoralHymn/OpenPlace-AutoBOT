@@ -1,5 +1,6 @@
 // === [Procesador de imágenes basado en Blue Marble] ===
 import { log } from "../core/logger.js";
+import { ColorUtils } from "./color-utils.js";
 
 /**
  * Procesador de imágenes con arquitectura Blue Marble
@@ -58,54 +59,39 @@ export class BlueMarblelImageProcessor {
   initializeColorPalette() {
     log('[BLUE MARBLE] Inicializando paleta de colores...');
     
-    // Detectar colores disponibles del sitio (mejorado)
-    const availableColors = this.detectSiteColors();
-    
-
+    // Usar la función importada detectAvailableColors que devuelve el formato correcto
+    const availableColors = detectAvailableColors();
     
     // Construir conjunto de colores permitidos
     const filteredColors = availableColors
-      .filter(c => c.name && c.name.toLowerCase() !== 'transparent' && Array.isArray(c.rgb));
-    
-
+      .filter(c => c.id !== undefined && typeof c.r === 'number' && typeof c.g === 'number' && typeof c.b === 'number');
     
     this.allowedColorsSet = new Set(
-      filteredColors.map(c => `${c.rgb[0]},${c.rgb[1]},${c.rgb[2]}`)
+      filteredColors.map(c => `${c.r},${c.g},${c.b}`)
     );
     
-
-
     // Asegurar que #deface (marcador de transparencia) se trate como permitido
     const defaceKey = '222,250,206';
     this.allowedColorsSet.add(defaceKey);
 
     // Mapear RGB a metadatos
     this.rgbToMeta = new Map(
-      availableColors
-        .filter(c => Array.isArray(c.rgb))
-        .map(c => [
-          `${c.rgb[0]},${c.rgb[1]},${c.rgb[2]}`, 
-          { 
-            id: c.id, 
-            premium: !!c.premium, 
-            name: c.name || `Color ${c.id}` 
-          }
-        ])
+      filteredColors.map(c => [
+        `${c.r},${c.g},${c.b}`, 
+        { 
+          id: c.id, 
+          premium: !!c.premium, 
+          name: c.name || `Color ${c.id}` 
+        }
+      ])
     );
 
-    // Mapear #deface a Transparent para UI
-    try {
-      const transparent = availableColors.find(c => c.name && c.name.toLowerCase() === 'transparent');
-      if (transparent && Array.isArray(transparent.rgb)) {
-        this.rgbToMeta.set(defaceKey, { 
-          id: transparent.id, 
-          premium: !!transparent.premium, 
-          name: transparent.name 
-        });
-      }
-    } catch {
-      // Ignorar errores al procesar transparencias
-    }
+    // Mapear #deface a Transparent para UI (usar ID 0 como fallback)
+    this.rgbToMeta.set(defaceKey, { 
+      id: 0, 
+      premium: false, 
+      name: 'Transparent' 
+    });
 
     log(`[BLUE MARBLE] Paleta inicializada: ${this.allowedColorsSet.size} colores permitidos`);
     return Array.from(availableColors);
@@ -213,20 +199,24 @@ export class BlueMarblelImageProcessor {
             deface++;
           }
 
-          // Función de tolerancia para colores muy próximos al blanco
+          // Verificar si es un color exacto primero
           let matchedKey = key;
           let isValidPixel = this.allowedColorsSet.has(key);
           
-          // Si no es un color exacto, verificar si es muy próximo al blanco
-          if (!isValidPixel && this.allowedColorsSet.has('255,255,255')) {
-            // Tolerancia para píxeles muy próximos al blanco (diferencia máxima de 10 en cada canal)
-            if (r >= 240 && g >= 240 && b >= 240) {
-              matchedKey = '255,255,255';
+          // Si no es exacto, usar algoritmo LAB para encontrar el color más cercano
+          if (!isValidPixel && this.allowedColors && this.allowedColors.length > 0) {
+            const closestColor = ColorUtils.findClosestPaletteColor(r, g, b, this.allowedColors, {
+              useLegacyRgb: false, // Usar algoritmo LAB avanzado
+              whiteThreshold: 240
+            });
+            
+            if (closestColor) {
+              matchedKey = `${closestColor.r},${closestColor.g},${closestColor.b}`;
               isValidPixel = true;
             }
           }
 
-          // Solo contar colores válidos (exactos o con tolerancia)
+          // Solo contar colores válidos
           if (!isValidPixel) continue;
 
           required++;
@@ -436,8 +426,29 @@ export class BlueMarblelImageProcessor {
 
         const colorKey = `${r},${g},${b}`;
         
-        // Solo incluir colores de la paleta del sitio
-        if (!this.allowedColorsSet.has(colorKey)) continue;
+        // Verificar si es un color exacto primero
+        let finalColorKey = colorKey;
+        let finalR = r, finalG = g, finalB = b;
+        let isValidPixel = this.allowedColorsSet.has(colorKey);
+        
+        // Si no es exacto, usar algoritmo LAB para encontrar el color más cercano
+        if (!isValidPixel && this.allowedColors && this.allowedColors.length > 0) {
+          const closestColor = ColorUtils.findClosestPaletteColor(r, g, b, this.allowedColors, {
+            useLegacyRgb: false, // Usar algoritmo LAB avanzado
+            whiteThreshold: 240
+          });
+          
+          if (closestColor) {
+            finalR = closestColor.r;
+            finalG = closestColor.g;
+            finalB = closestColor.b;
+            finalColorKey = `${finalR},${finalG},${finalB}`;
+            isValidPixel = true;
+          }
+        }
+        
+        // Solo incluir colores válidos
+        if (!isValidPixel) continue;
 
         // Calcular coordenadas globales
         const globalX = baseX + x;
@@ -449,8 +460,8 @@ export class BlueMarblelImageProcessor {
         const localX = globalX % 1000;
         const localY = globalY % 1000;
 
-        // Obtener metadatos del color
-        const colorMeta = this.rgbToMeta.get(colorKey) || { id: 0, name: 'Unknown' };
+        // Obtener metadatos del color usando la clave final (con tolerancia aplicada)
+        const colorMeta = this.rgbToMeta.get(finalColorKey) || { id: 0, name: 'Unknown' };
 
         queue.push({
           // Coordenadas de imagen (relativas)
@@ -466,13 +477,13 @@ export class BlueMarblelImageProcessor {
           localY: localY,
           // Información de color
           color: {
-            r: r,
-            g: g,
-            b: b,
+            r: finalR,
+            g: finalG,
+            b: finalB,
             id: colorMeta.id,
             name: colorMeta.name
           },
-          originalColor: { r, g, b, alpha }
+          originalColor: { r: finalR, g: finalG, b: finalB, alpha }
         });
       }
     }
@@ -588,29 +599,16 @@ export class BlueMarblelImageProcessor {
 }
 
 // Mantener exports de funciones para compatibilidad
-export { detectAvailableColors } from "./processor.js";
+import { detectAvailableColors } from "./processor.js";
+export { detectAvailableColors };
 
-export function findClosestColor(rgb, palette) {
-  if (!palette || palette.length === 0) return null;
-  
-  let closestColor = null;
-  let minDistance = Infinity;
-  
-  for (const color of palette) {
-    const colorRgb = color.rgb || color;
-    const distance = Math.sqrt(
-      Math.pow(rgb.r - colorRgb.r, 2) +
-      Math.pow(rgb.g - colorRgb.g, 2) +
-      Math.pow(rgb.b - colorRgb.b, 2)
-    );
-    
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestColor = color;
-    }
-  }
-  
-  return closestColor;
+export function findClosestColor(rgb, palette, options = {}) {
+  // Usar las nuevas utilidades de color avanzadas
+  return ColorUtils.findClosestColor(rgb, palette, {
+    useLegacyRgb: false, // Usar algoritmo LAB por defecto
+    whiteThreshold: 240,
+    ...options
+  });
 }
 
 export function generatePixelQueue(imageData, startPosition, tileX, tileY) {
