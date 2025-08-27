@@ -8,6 +8,10 @@ export function createGuardUI(texts) {
     top: 20px;
     right: 20px;
     width: 350px;
+    min-width: 280px;
+    max-width: 500px;
+    min-height: 200px;
+    max-height: 80vh;
     background: #1a1a1a;
     border: 1px solid #333;
     border-radius: 8px;
@@ -15,17 +19,21 @@ export function createGuardUI(texts) {
     font-family: 'Segoe UI', Roboto, sans-serif;
     z-index: 9999;
     box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    resize: both;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
   `;
 
   container.innerHTML = `
-    <div style="padding: 12px 15px; background: #2d3748; color: #60a5fa; font-size: 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; cursor: move;" class="guard-header">
+    <div style="padding: 12px 15px; background: #2d3748; color: #60a5fa; font-size: 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; cursor: move; flex-shrink: 0;" class="guard-header">
       <div style="display: flex; align-items: center; gap: 8px;">
         🛡️ <span>${texts.title}</span>
       </div>
       <button id="closeBtn" style="background: none; border: none; color: #eee; cursor: pointer; opacity: 0.7; padding: 5px;">❌</button>
     </div>
     
-    <div style="padding: 15px;">
+    <div style="padding: 15px; flex: 1; overflow-y: auto;">
       <!-- Estado de inicialización -->
       <div id="initSection">
         <button id="initBtn" style="width: 100%; padding: 10px; background: #60a5fa; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-bottom: 10px;">
@@ -122,8 +130,12 @@ export function createGuardUI(texts) {
       </div>
       
       <!-- Controles de configuración -->
-      <div id="configSection" style="background: #2d3748; padding: 10px; border-radius: 6px; margin-top: 10px;">
-        <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #cbd5e0;">⚙️ Configuración</h4>
+      <div id="configSection" style="background: #2d3748; border-radius: 6px; margin-top: 10px; overflow: hidden;">
+        <div id="configHeader" style="padding: 10px; cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between; background: #374151; border-radius: 6px 6px 0 0;">
+          <h4 style="margin: 0; font-size: 14px; color: #cbd5e0;">⚙️ Configuración</h4>
+          <span id="configToggle" style="font-size: 12px; color: #9ca3af; transition: transform 0.3s ease;">▼</span>
+        </div>
+        <div id="configContent" style="padding: 10px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease;">
         
         <div style="display: flex; gap: 10px; margin-bottom: 10px;">
           <div style="flex: 1;">
@@ -170,14 +182,27 @@ export function createGuardUI(texts) {
             🔍 Analizar
           </button>
         </div>
+        </div>
       </div>
       
       <!-- Estado -->
       <div id="statusBar" style="background: #2d3748; padding: 8px; border-radius: 4px; text-align: center; font-size: 13px; margin-top: 10px;">
         ⏳ ${texts.waitingInit}
       </div>
-    </div>
-  `;
+     </div>
+     
+     <!-- Indicador de redimensionamiento -->
+     <div style="
+       position: absolute;
+       bottom: 0;
+       right: 0;
+       width: 20px;
+       height: 20px;
+       background: linear-gradient(-45deg, transparent 30%, #666 30%, #666 40%, transparent 40%, transparent 60%, #666 60%, #666 70%, transparent 70%);
+       cursor: nw-resize;
+       border-bottom-right-radius: 15px;
+     "></div>
+   `;
 
   document.body.appendChild(container);
 
@@ -226,7 +251,10 @@ export function createGuardUI(texts) {
     colorComparisonSelect: container.querySelector('#colorComparisonSelect'),
     colorThresholdInput: container.querySelector('#colorThresholdInput'),
     saveBtn: container.querySelector('#saveBtn'),
-    analyzeBtn: container.querySelector('#analyzeBtn')
+    analyzeBtn: container.querySelector('#analyzeBtn'),
+    configHeader: container.querySelector('#configHeader'),
+    configContent: container.querySelector('#configContent'),
+    configToggle: container.querySelector('#configToggle')
   };
 
   // API de la UI
@@ -355,6 +383,31 @@ export function createGuardUI(texts) {
       areaFileInput.remove();
     }
   };
+
+  // Funcionalidad de colapso/expansión de configuración
+  let isConfigCollapsed = true; // Inicialmente colapsado
+  
+  // Configurar estado inicial (colapsado)
+  elements.configContent.style.maxHeight = '0';
+  elements.configContent.style.padding = '0 10px';
+  elements.configToggle.style.transform = 'rotate(-90deg)';
+  
+  // Event listener para toggle de configuración
+  elements.configHeader.addEventListener('click', () => {
+    isConfigCollapsed = !isConfigCollapsed;
+    
+    if (isConfigCollapsed) {
+      // Colapsar
+      elements.configContent.style.maxHeight = '0';
+      elements.configContent.style.padding = '0 10px';
+      elements.configToggle.style.transform = 'rotate(-90deg)';
+    } else {
+      // Expandir
+      elements.configContent.style.maxHeight = '400px'; // Altura suficiente para todo el contenido
+      elements.configContent.style.padding = '10px';
+      elements.configToggle.style.transform = 'rotate(0deg)';
+    }
+  });
 
   // Event listener para botón de análisis
   elements.analyzeBtn.addEventListener('click', async () => {
