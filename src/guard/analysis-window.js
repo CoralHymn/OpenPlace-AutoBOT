@@ -2,6 +2,8 @@
 import { log } from '../core/logger.js';
 import { guardState } from './config.js';
 import { analyzeAreaPixels } from './processor.js';
+import { registerWindow, unregisterWindow } from '../core/window-manager.js';
+import { getGuardTexts } from '../locales/index.js';
 
 // Variables globales para la ventana
 let analysisWindowInstance = null;
@@ -12,6 +14,9 @@ let autoRefreshInterval = null;
 // Cerrar ventana de análisis
 export function closeAnalysisWindow() {
   if (analysisWindowInstance) {
+    // Desregistrar ventana del gestor
+    unregisterWindow(analysisWindowInstance.analysisWindow);
+    
     // Limpiar interval si existe
      if (autoRefreshInterval) {
        window.clearInterval(autoRefreshInterval);
@@ -170,6 +175,20 @@ export function createAnalysisWindow() {
       <button id="autoFitZoom" style="width: 100%; padding: 8px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 8px;">
         📐 Ajustar Zoom
       </button>
+      
+      <!-- Coordenadas del área -->
+      <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #4b5563;">
+        <div style="font-size: 10px; color: #9ca3af; margin-bottom: 5px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+            <span>Superior Izq.:</span>
+            <span id="coordsUpperLeft">--</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Inferior Der.:</span>
+            <span id="coordsLowerRight">--</span>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 
@@ -213,6 +232,9 @@ export function createAnalysisWindow() {
   analysisWindow.appendChild(content);
   analysisWindow.appendChild(resizeHandle);
   document.body.appendChild(analysisWindow);
+
+  // Registrar ventana para manejo de z-index
+  registerWindow(analysisWindow);
 
   // Inicializar el análisis
   initializeAnalysis(canvas, controlPanel);
@@ -294,6 +316,26 @@ export function createAnalysisWindow() {
    return { analysisWindow, canvas, controlPanel };
 }
 
+// Función para refrescar solo los datos sin reajustar zoom
+async function refreshAnalysisData(canvas, controlPanel) {
+  try {
+    // Obtener píxeles actuales del canvas
+    const currentPixels = await analyzeAreaPixels(guardState.protectionArea);
+    
+    // Comparar con píxeles originales
+    const analysis = comparePixels(guardState.originalPixels, currentPixels || new Map());
+    
+    // Actualizar estadísticas
+    updateStatistics(controlPanel, analysis);
+    
+    // Renderizar visualización manteniendo zoom actual
+    renderVisualization(canvas, analysis);
+    
+  } catch (error) {
+    log('❌ Error en refresco de análisis:', error);
+  }
+}
+
 // Inicializar el análisis y visualización
 async function initializeAnalysis(canvas, controlPanel) {
   try {
@@ -335,9 +377,12 @@ async function initializeAnalysis(canvas, controlPanel) {
     renderVisualization(canvas, analysis);
     
     // Configurar controles
-    setupControls(controlPanel, canvas, analysis);
-    
-    log('✅ Análisis completado');
+  setupControls(controlPanel, canvas, analysis);
+  
+  // Actualizar coordenadas
+  updateCoordinatesDisplay(controlPanel);
+  
+  log('✅ Análisis completado');
   } catch (error) {
     log('❌ Error en análisis:', error);
     console.error('Error detallado:', error);
@@ -560,21 +605,7 @@ function setupControls(controlPanel, canvas, analysis) {
      if (autoRefreshCheckbox.checked) {
        const interval = parseInt(refreshIntervalInput.value) * 1000;
        autoRefreshInterval = window.setInterval(async () => {
-         // Preservar el zoom actual antes del refresco
-         const currentZoom = parseFloat(zoomSlider.value);
-         const currentOpacity = parseFloat(opacitySlider.value);
-         
-         await initializeAnalysis(canvas, controlPanel);
-         
-         // Restaurar el zoom y opacidad después del refresco
-         zoomSlider.value = currentZoom;
-         zoomValue.textContent = `${Math.round(currentZoom * 100)}%`;
-         canvas.style.transform = `scale(${currentZoom})`;
-         canvas.style.transformOrigin = 'top left';
-         
-         opacitySlider.value = currentOpacity;
-         opacityValue.textContent = `${Math.round(currentOpacity * 100)}%`;
-         canvas.style.opacity = currentOpacity;
+         await refreshAnalysisData(canvas, controlPanel);
        }, interval);
        log(`🔄 Auto-refresco activado cada ${refreshIntervalInput.value} segundos`);
      } else {
@@ -595,21 +626,7 @@ function setupControls(controlPanel, canvas, analysis) {
        }
        const interval = parseInt(refreshIntervalInput.value) * 1000;
        autoRefreshInterval = window.setInterval(async () => {
-         // Preservar el zoom actual antes del refresco
-         const currentZoom = parseFloat(zoomSlider.value);
-         const currentOpacity = parseFloat(opacitySlider.value);
-         
-         await initializeAnalysis(canvas, controlPanel);
-         
-         // Restaurar el zoom y opacidad después del refresco
-         zoomSlider.value = currentZoom;
-         zoomValue.textContent = `${Math.round(currentZoom * 100)}%`;
-         canvas.style.transform = `scale(${currentZoom})`;
-         canvas.style.transformOrigin = 'top left';
-         
-         opacitySlider.value = currentOpacity;
-         opacityValue.textContent = `${Math.round(currentOpacity * 100)}%`;
-         canvas.style.opacity = currentOpacity;
+         await refreshAnalysisData(canvas, controlPanel);
        }, interval);
        log(`🔄 Intervalo de auto-refresco actualizado a ${refreshIntervalInput.value} segundos`);
      }
@@ -617,7 +634,7 @@ function setupControls(controlPanel, canvas, analysis) {
   
   // Botón de actualizar
   refreshBtn.addEventListener('click', async () => {
-    await initializeAnalysis(canvas, controlPanel);
+    await refreshAnalysisData(canvas, controlPanel);
   });
   
   // Checkboxes de visualización - refresco inmediato
@@ -689,4 +706,19 @@ function calculateDeltaE(lab1, lab2) {
   const deltaB = lab1.b - lab2.b;
   
   return Math.sqrt(deltaL * deltaL + deltaA * deltaA + deltaB * deltaB);
+}
+
+// Función para actualizar las coordenadas mostradas
+function updateCoordinatesDisplay(controlPanel) {
+  const coordsUpperLeft = controlPanel.querySelector('#coordsUpperLeft');
+  const coordsLowerRight = controlPanel.querySelector('#coordsLowerRight');
+  
+  if (guardState.protectionArea) {
+    const { x1, y1, x2, y2 } = guardState.protectionArea;
+    coordsUpperLeft.textContent = `(${x1}, ${y1})`;
+    coordsLowerRight.textContent = `(${x2}, ${y2})`;
+  } else {
+    coordsUpperLeft.textContent = '--';
+    coordsLowerRight.textContent = '--';
+  }
 }

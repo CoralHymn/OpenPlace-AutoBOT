@@ -20,6 +20,35 @@ export async function runGuard() {
   // Inicializar sistema de idiomas
   initializeLanguage();
   
+  // Cargar configuración previa desde localStorage (si existe)
+  try {
+    const raw = localStorage.getItem('wplace-guard-config');
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg && typeof cfg === 'object') {
+        if (typeof cfg.protectionPattern === 'string') guardState.protectionPattern = cfg.protectionPattern;
+        if (typeof cfg.preferColor === 'boolean') guardState.preferColor = cfg.preferColor;
+        if (Array.isArray(cfg.preferredColorIds)) {
+          guardState.preferredColorIds = cfg.preferredColorIds;
+          guardState.preferredColorId = cfg.preferredColorIds.length > 0 ? cfg.preferredColorIds[0] : null; // legado
+        } else if (typeof cfg.preferredColorId === 'number') {
+          guardState.preferredColorIds = [cfg.preferredColorId];
+          guardState.preferredColorId = cfg.preferredColorId;
+        }
+        if (typeof cfg.excludeColor === 'boolean') guardState.excludeColor = cfg.excludeColor;
+        if (Array.isArray(cfg.excludedColorIds)) guardState.excludedColorIds = cfg.excludedColorIds;
+        if (typeof cfg.spendAllPixelsOnStart === 'boolean') guardState.spendAllPixelsOnStart = cfg.spendAllPixelsOnStart;
+        if (Number.isFinite(cfg.minChargesToWait)) guardState.minChargesToWait = cfg.minChargesToWait;
+        if (Number.isFinite(cfg.pixelsPerBatch)) guardState.pixelsPerBatch = cfg.pixelsPerBatch;
+        if (typeof cfg.randomWaitTime === 'boolean') guardState.randomWaitTime = cfg.randomWaitTime;
+        if (Number.isFinite(cfg.randomWaitMin)) guardState.randomWaitMin = cfg.randomWaitMin;
+        if (Number.isFinite(cfg.randomWaitMax)) guardState.randomWaitMax = cfg.randomWaitMax;
+      }
+    }
+  } catch (e) {
+    log('⚠️ No se pudo cargar configuración previa:', e);
+  }
+  
   // Verificar conflictos con otros bots
   if (!checkExistingBots()) {
     return;
@@ -180,15 +209,18 @@ function setupEventListeners() {
   
   elements.startBtn.addEventListener('click', startGuard);
   elements.stopBtn.addEventListener('click', async () => {
-    // Simplemente detener la protección sin opciones de guardado
-    guardState.running = false;
-    guardState.loopId = null;
-    guardState.ui.setRunningState(false);
-    guardState.ui.updateStatus('⏹️ Protección detenida', 'warning');
-    
-    if (guardState.checkInterval) {
-      clearInterval(guardState.checkInterval);
-      guardState.checkInterval = null;
+    // Usar la función stopGuard que maneja correctamente todos los estados
+    stopGuard();
+  });
+  
+  elements.watchBtn.addEventListener('click', () => {
+    // Toggle entre iniciar y detener el modo Vigía
+    if (guardState.running && guardState.watchMode) {
+      // Si está corriendo en modo vigía, detenerlo
+      stopGuard();
+    } else {
+      // Si no está corriendo o está en modo protección, iniciar vigía
+      startWatch();
     }
   });
   
@@ -226,7 +258,6 @@ function setupEventListeners() {
         cancel: "Cancelar"
       }
     );
-    
     if (splitConfirm === 'save') {
       const splitInput = document.querySelector('#splitCountInput');
       const splitCount = parseInt(splitInput?.value) || 1;
@@ -238,33 +269,6 @@ function setupEventListeners() {
       }
     }
   });
-
-  // Eventos para configuración editable
-  elements.pixelsPerBatchInput.addEventListener('change', (e) => {
-    guardState.pixelsPerBatch = Math.max(1, Math.min(50, parseInt(e.target.value) || 10));
-    e.target.value = guardState.pixelsPerBatch;
-  });
-
-  elements.minChargesInput.addEventListener('change', (e) => {
-    guardState.minChargesToWait = Math.max(1, Math.min(100, parseInt(e.target.value) || 20));
-    e.target.value = guardState.minChargesToWait;
-  });
-
-  elements.protectionPatternSelect.addEventListener('change', (e) => {
-    guardState.protectionPattern = e.target.value;
-    log(`🎯 Patrón de protección cambiado a: ${e.target.value}`);
-  });
-
-  elements.colorComparisonSelect.addEventListener('change', (e) => {
-    guardState.config.colorComparisonMethod = e.target.value;
-    log(`🎨 Método de comparación de color cambiado a: ${e.target.value}`);
-  });
-
-  // Actualizar inputs con valores del estado
-  elements.pixelsPerBatchInput.value = guardState.pixelsPerBatch;
-  elements.minChargesInput.value = guardState.minChargesToWait;
-  elements.protectionPatternSelect.value = guardState.protectionPattern;
-  elements.colorComparisonSelect.value = guardState.config.colorComparisonMethod;
 }
 
 async function initializeGuard(isAutoInit = false) {
@@ -488,6 +492,8 @@ async function startGuard() {
   }
   
   guardState.running = true;
+  guardState.watchMode = false; // Modo protección completa
+  guardState.totalRepaired = 0; // Resetear contador para "gastar todos los píxeles al iniciar"
   guardState.ui.setRunningState(true);
   guardState.ui.updateStatus(t('guard.protectionStarted'), 'success');
   
@@ -503,8 +509,35 @@ async function startGuard() {
   await checkForChanges();
 }
 
+async function startWatch() {
+  if (!guardState.protectionArea || !guardState.originalPixels.size) {
+    guardState.ui.updateStatus(t('guard.captureFirst'), 'error');
+    return;
+  }
+  
+  guardState.running = true;
+  guardState.watchMode = true; // Modo solo vigilancia, sin reparar
+  guardState.totalRepaired = 0; // Resetear contador para consistencia
+  guardState.ui.setRunningState(true);
+  guardState.ui.updateWatchButton(true); // Actualizar botón a estado "detener"
+  guardState.ui.updateStatus('👁️ Modo Vigía iniciado - solo monitorización', 'success');
+  
+  log('👁️ Iniciando modo Vigía del área');
+  
+  // Configurar intervalo de verificación (mismo que protección)
+  guardState.checkInterval = setInterval(checkForChanges, GUARD_DEFAULTS.CHECK_INTERVAL);
+  
+  // Iniciar monitoreo de cargas (para mostrar estadísticas)
+  startChargeMonitoring();
+  
+  // Primera verificación inmediata
+  await checkForChanges();
+}
+
 function stopGuard() {
+  const wasWatchMode = guardState.watchMode;
   guardState.running = false;
+  guardState.watchMode = false; // Resetear modo vigía
   
   if (guardState.checkInterval) {
     clearInterval(guardState.checkInterval);
@@ -516,10 +549,12 @@ function stopGuard() {
   
   if (guardState.ui) {
     guardState.ui.setRunningState(false);
-    guardState.ui.updateStatus(t('guard.protectionStopped'), 'warning');
+    guardState.ui.updateWatchButton(false); // Actualizar botón a estado "iniciar"
+    const statusMessage = wasWatchMode ? '⏹️ Vigía detenido' : t('guard.protectionStopped');
+    guardState.ui.updateStatus(statusMessage, 'warning');
   }
   
-  log('⏹️ Protección detenida');
+  log(wasWatchMode ? '⏹️ Vigía detenido' : '⏹️ Protección detenida');
 }
 
 // Variables para el sistema de reposicionamiento

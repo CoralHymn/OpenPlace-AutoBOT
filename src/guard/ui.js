@@ -1,4 +1,6 @@
 import { hasProgress } from './save-load.js';
+import { createConfigWindow } from './config-window.js';
+import { registerWindow, unregisterWindow } from '../core/window-manager.js';
 
 export function createGuardUI(texts) {
   // Crear contenedor principal
@@ -43,8 +45,8 @@ export function createGuardUI(texts) {
       
       <!-- Selección de área -->
       <div id="areaSection" style="display: none;">
-        <!-- Botones de área - en dos columnas -->
-        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+        <!-- Botones de área - en dos columnas con transición -->
+        <div id="areaActionsRow" style="display: flex; gap: 10px; margin-bottom: 15px; overflow: hidden; transition: max-height 0.3s ease, opacity 0.3s ease; max-height: 200px; opacity: 1;">
           <button id="selectAreaBtn" style="flex: 1; padding: 10px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">
             🎯 ${texts.selectArea}
           </button>
@@ -53,46 +55,57 @@ export function createGuardUI(texts) {
           </button>
         </div>
         
-        <!-- Coordenadas capturadas (solo lectura) -->
-        <div style="margin-bottom: 15px;">
-          <div style="display: flex; gap: 10px; margin-bottom: 8px;">
-            <div style="flex: 1;">
-              <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">${texts.upperLeft}:</label>
-              <div style="display: flex; gap: 5px;">
-                <input id="x1Input" type="number" placeholder="X1" readonly style="flex: 1; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-                <input id="y1Input" type="number" placeholder="Y1" readonly style="flex: 1; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-              </div>
-            </div>
-          </div>
-          
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <div style="flex: 1;">
-              <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">${texts.lowerRight}:</label>
-              <div style="display: flex; gap: 5px;">
-                <input id="x2Input" type="number" placeholder="X2" readonly style="flex: 1; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-                <input id="y2Input" type="number" placeholder="Y2" readonly style="flex: 1; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-              </div>
-            </div>
-          </div>
+        <!-- Fila 1: Iniciar / Detener -->
+        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+          <button id="startBtn" style="flex: 1; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            ▶️ ${texts.startProtection}
+          </button>
+          <button id="stopBtn" style="flex: 1; padding: 10px; background: #ef4444; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            ⏹️ ${texts.stopProtection}
+          </button>
         </div>
-        
-        <button id="startBtn" style="width: 100%; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-bottom: 10px;" disabled>
-          ▶️ ${texts.startProtection}
-        </button>
-        
-        <button id="stopBtn" style="width: 100%; padding: 10px; background: #ef4444; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-bottom: 10px;" disabled>
-          ⏹️ ${texts.stopProtection}
-        </button>
+
+        <!-- Fila 2: Reposicionar / Guardar -->
+        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+          <button id="repositionBtn" style="flex: 1; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            📍 Reposicionar
+          </button>
+          <button id="saveBtn" style="flex: 1; padding: 8px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            💾 ${texts.save || 'Guardar'}
+          </button>
+        </div>
+
+        <!-- Fila 3: Analizar Área / Logs -->
+        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+          <button id="analyzeBtn" style="flex: 1; padding: 8px; background: #3b82f6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="margin-right: 6px; flex-shrink: 0;" fill="none">
+              <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"></circle>
+              <line x1="16.65" y1="16.65" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+            </svg>
+            Analizar Área
+          </button>
+          <button id="logWindowBtn" style="flex: 1; padding: 8px; background: #6b7280; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="margin-right: 6px; flex-shrink: 0;" fill="none">
+              <rect x="4" y="3" width="16" height="18" rx="2" ry="2" stroke="currentColor" stroke-width="2"></rect>
+              <line x1="8" y1="7" x2="16" y2="7" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+              <line x1="8" y1="11" x2="16" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+              <line x1="8" y1="15" x2="13" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+            </svg>
+            ${texts.logWindow || 'Logs'}
+          </button>
+        </div>
+
+        <!-- Fila 4: Vigía / Configuración -->
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+          <button id="watchBtn" style="flex: 1; padding: 8px; background: #f59e0b; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; transition: all 0.3s ease; opacity: 0.5;" disabled>
+            👁️ Vigía
+          </button>
+          <button id="configBtn" style="flex: 1; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px;">
+            ⚙️ Configuración
+          </button>
+        </div>
 
 
-        
-        <button id="logWindowBtn" style="width: 100%; padding: 8px; background: #6b7280; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 0; font-size: 13px;">
-          📋 ${texts.logWindow || 'Logs'}
-        </button>
-        
-        <button id="repositionBtn" style="width: 100%; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 5px; font-size: 13px;" disabled>
-          📍 Reposicionar
-        </button>
       </div>
       
       <!-- Estadísticas -->
@@ -129,60 +142,6 @@ export function createGuardUI(texts) {
         </div>
       </div>
       
-      <!-- Controles de configuración -->
-      <div id="configSection" style="background: #2d3748; border-radius: 6px; margin-top: 10px; overflow: hidden;">
-        <div id="configHeader" style="padding: 10px; cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between; background: #374151; border-radius: 6px 6px 0 0;">
-          <h4 style="margin: 0; font-size: 14px; color: #cbd5e0;">⚙️ Configuración</h4>
-          <span id="configToggle" style="font-size: 12px; color: #9ca3af; transition: transform 0.3s ease;">▼</span>
-        </div>
-        <div id="configContent" style="padding: 10px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease;">
-        
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-          <div style="flex: 1;">
-            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">Píxeles por lote:</label>
-            <input id="pixelsPerBatchInput" type="number" min="1" max="50" style="width: 100%; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-          </div>
-          <div style="flex: 1;">
-            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">Cargas mínimas:</label>
-            <input id="minChargesInput" type="number" min="1" max="100" style="width: 100%; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-          </div>
-        </div>
-        
-        <div style="margin-bottom: 10px;">
-          <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">🎯 Patrón de Protección:</label>
-          <select id="protectionPatternSelect" style="width: 100%; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-            <option value="random">🎲 Aleatorio</option>
-            <option value="line">📏 Línea</option>
-            <option value="center">🎯 Centro</option>
-            <option value="spiral">🌀 Espiral</option>
-            <option value="human">👤 Humano</option>
-          </select>
-        </div>
-        
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-          <div style="flex: 1;">
-            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">🎨 Comparación de Color:</label>
-            <select id="colorComparisonSelect" style="width: 100%; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-              <option value="rgb">RGB (Rápido)</option>
-              <option value="lab">LAB (Preciso)</option>
-            </select>
-          </div>
-          <div style="flex: 1;">
-            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #cbd5e0;">🎚️ Umbral:</label>
-            <input id="colorThresholdInput" type="number" min="1" max="50" value="10" style="width: 100%; padding: 5px; background: #374151; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db; font-size: 13px;">
-          </div>
-        </div>
-        
-        <!-- Controles de save/load -->
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-          <button id="saveBtn" style="flex: 1; padding: 8px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px;">
-            💾 Guardar
-          </button>
-          <button id="analyzeBtn" style="flex: 1; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px;" disabled>
-            🔍 Analizar
-          </button>
-        </div>
-        </div>
       </div>
       
       <!-- Estado -->
@@ -206,6 +165,9 @@ export function createGuardUI(texts) {
 
   document.body.appendChild(container);
 
+  // Registrar ventana para manejo de z-index
+  registerWindow(container);
+
   // Input oculto para archivos de área
   const areaFileInput = document.createElement('input');
   areaFileInput.type = 'file';
@@ -227,8 +189,9 @@ export function createGuardUI(texts) {
     y2Input: container.querySelector('#y2Input'),
     startBtn: container.querySelector('#startBtn'),
     stopBtn: container.querySelector('#stopBtn'),
-
+    watchBtn: container.querySelector('#watchBtn'),
     logWindowBtn: container.querySelector('#logWindowBtn'),
+    configBtn: container.querySelector('#configBtn'),
     repositionBtn: container.querySelector('#repositionBtn'),
     closeBtn: container.querySelector('#closeBtn'),
     initSection: container.querySelector('#initSection'),
@@ -245,16 +208,9 @@ export function createGuardUI(texts) {
     accuracyCount: container.querySelector('#accuracyCount'),
     statusBar: container.querySelector('#statusBar'),
     areaFileInput: areaFileInput,
-    pixelsPerBatchInput: container.querySelector('#pixelsPerBatchInput'),
-    minChargesInput: container.querySelector('#minChargesInput'),
-    protectionPatternSelect: container.querySelector('#protectionPatternSelect'),
-    colorComparisonSelect: container.querySelector('#colorComparisonSelect'),
-    colorThresholdInput: container.querySelector('#colorThresholdInput'),
     saveBtn: container.querySelector('#saveBtn'),
-    analyzeBtn: container.querySelector('#analyzeBtn'),
-    configHeader: container.querySelector('#configHeader'),
-    configContent: container.querySelector('#configContent'),
-    configToggle: container.querySelector('#configToggle')
+  analyzeBtn: container.querySelector('#analyzeBtn'),
+  areaActionsRow: container.querySelector('#areaActionsRow')
   };
 
   // API de la UI
@@ -333,80 +289,167 @@ export function createGuardUI(texts) {
     },
 
     enableStartBtn: () => {
+      // Habilitar botón de iniciar con transición suave
       elements.startBtn.disabled = false;
-      // También habilitar el botón de análisis cuando hay un área seleccionada
-      elements.analyzeBtn.disabled = false;
-      // Actualizar estado del botón de reposicionamiento
-      ui.updateRepositionBtn();
+      elements.startBtn.style.opacity = '1';
+      elements.startBtn.style.cursor = 'pointer';
+      
+      // Habilitar otros botones cuando hay área seleccionada
+      ui.updateButtonsState();
     },
 
     updateRepositionBtn: () => {
       // El botón de reposicionamiento solo está disponible si hay progreso (área + píxeles)
-      elements.repositionBtn.disabled = !hasProgress();
-    },
-
-    setRunningState: (running) => {
-      elements.startBtn.disabled = running;
-      elements.stopBtn.disabled = !running;
-      elements.selectAreaBtn.disabled = running;
+      const hasProgressData = hasProgress();
+      elements.repositionBtn.disabled = !hasProgressData;
       
-      if (running) {
-        // Deshabilitar reposicionamiento mientras está corriendo
-        elements.repositionBtn.disabled = true;
+      if (hasProgressData) {
+        elements.repositionBtn.style.opacity = '1';
+        elements.repositionBtn.style.cursor = 'pointer';
       } else {
-        // Actualizar estado basado en si hay progreso
-        ui.updateRepositionBtn();
-        // Mantener el botón de análisis habilitado si hay área protegida
-        if (elements.x1Input.value && elements.y1Input.value && elements.x2Input.value && elements.y2Input.value) {
-          elements.analyzeBtn.disabled = false;
-        }
+        elements.repositionBtn.style.opacity = '0.5';
+        elements.repositionBtn.style.cursor = 'not-allowed';
       }
     },
 
-    updateCoordinates: (coords) => {
-      if (coords.x1 !== undefined) elements.x1Input.value = coords.x1;
-      if (coords.y1 !== undefined) elements.y1Input.value = coords.y1;
-      if (coords.x2 !== undefined) elements.x2Input.value = coords.x2;
-      if (coords.y2 !== undefined) elements.y2Input.value = coords.y2;
+    updateWatchButton: (isWatching) => {
+      if (isWatching) {
+        elements.watchBtn.innerHTML = '⏹️ Detener Vigía';
+        elements.watchBtn.style.background = '#ef4444'; // Rojo para detener
+      } else {
+        elements.watchBtn.innerHTML = '👁️ Vigía';
+        elements.watchBtn.style.background = '#f59e0b'; // Naranja original
+      }
+    },
+
+    updateButtonsState: () => {
+      // Verificar si hay área seleccionada o archivo cargado
+      const hasArea = hasProgress() || (window.guardState && window.guardState.protectionArea);
       
-      // Habilitar botón de análisis si todas las coordenadas están definidas
-      if (elements.x1Input.value && elements.y1Input.value && elements.x2Input.value && elements.y2Input.value) {
-        elements.analyzeBtn.disabled = false;
+      // Actualizar botón de análisis
+      elements.analyzeBtn.disabled = !hasArea;
+      if (hasArea) {
+        elements.analyzeBtn.style.opacity = '1';
+        elements.analyzeBtn.style.cursor = 'pointer';
+      } else {
+        elements.analyzeBtn.style.opacity = '0.5';
+        elements.analyzeBtn.style.cursor = 'not-allowed';
       }
       
-      // Actualizar estado del botón de reposicionamiento
+      // Actualizar botón de vigía
+      elements.watchBtn.disabled = !hasArea;
+      if (hasArea) {
+        elements.watchBtn.style.opacity = '1';
+        elements.watchBtn.style.cursor = 'pointer';
+      } else {
+        elements.watchBtn.style.opacity = '0.5';
+        elements.watchBtn.style.cursor = 'not-allowed';
+      }
+      
+      // Actualizar botón de guardar
+      elements.saveBtn.disabled = !hasArea;
+      if (hasArea) {
+        elements.saveBtn.style.opacity = '1';
+        elements.saveBtn.style.cursor = 'pointer';
+      } else {
+        elements.saveBtn.style.opacity = '0.5';
+        elements.saveBtn.style.cursor = 'not-allowed';
+      }
+      
+      // Actualizar botón de reposicionamiento
       ui.updateRepositionBtn();
     },
 
+    setRunningState: (running) => {
+      if (running) {
+        // Deshabilitar botón de iniciar con transición suave
+        elements.startBtn.disabled = true;
+        elements.startBtn.style.opacity = '0.5';
+        elements.startBtn.style.cursor = 'not-allowed';
+        
+        // Habilitar botón de detener con transición suave
+        elements.stopBtn.disabled = false;
+        elements.stopBtn.style.opacity = '1';
+        elements.stopBtn.style.cursor = 'pointer';
+        
+        elements.selectAreaBtn.disabled = true;
+        // Deshabilitar reposicionamiento mientras está corriendo
+        elements.repositionBtn.disabled = true;
+        // Ocultar fila de selección/carga con transición
+        if (elements.areaActionsRow) {
+          elements.areaActionsRow.style.maxHeight = '0px';
+          elements.areaActionsRow.style.opacity = '0';
+          setTimeout(() => { elements.areaActionsRow.style.display = 'none'; }, 300);
+        }
+      } else {
+        // Deshabilitar botón de detener con transición suave
+        elements.stopBtn.disabled = true;
+        elements.stopBtn.style.opacity = '0.5';
+        elements.stopBtn.style.cursor = 'not-allowed';
+        
+        // Habilitar botón de iniciar solo si hay área seleccionada
+        ui.updateStartButtonState();
+        
+        elements.selectAreaBtn.disabled = false;
+        // Actualizar estado de todos los botones
+        ui.updateButtonsState();
+        // Mostrar fila de selección/carga con transición
+        if (elements.areaActionsRow) {
+          elements.areaActionsRow.style.display = 'flex';
+          // usar raf para aplicar transición
+          window.requestAnimationFrame(() => {
+            elements.areaActionsRow.style.maxHeight = '200px';
+            elements.areaActionsRow.style.opacity = '1';
+          });
+        }
+      }
+
+    },
+
+    updateCoordinates: (coords) => {
+      // Las coordenadas ahora se muestran en analysis-window.js
+      // Solo actualizamos el estado de los botones
+      if (coords.x1 !== undefined && coords.y1 !== undefined && coords.x2 !== undefined && coords.y2 !== undefined) {
+        // Habilitar botón de iniciar cuando hay área seleccionada
+        ui.updateStartButtonState();
+        // Actualizar estado de todos los botones
+        ui.updateButtonsState();
+      }
+    },
+
+    updateStartButtonState: () => {
+      // Verificar si hay área seleccionada o archivo cargado
+      const hasArea = hasProgress() || (window.guardState && window.guardState.protectionArea);
+      
+      if (hasArea && !elements.startBtn.disabled) {
+        // Ya está habilitado, no hacer nada
+        return;
+      }
+      
+      if (hasArea) {
+        // Habilitar botón de iniciar con transición suave
+        elements.startBtn.disabled = false;
+        elements.startBtn.style.opacity = '1';
+        elements.startBtn.style.cursor = 'pointer';
+      } else {
+        // Deshabilitar botón de iniciar con transición suave
+        elements.startBtn.disabled = true;
+        elements.startBtn.style.opacity = '0.5';
+        elements.startBtn.style.cursor = 'not-allowed';
+      }
+    },
+
     destroy: () => {
+      // Desregistrar ventana del gestor
+      unregisterWindow(container);
       container.remove();
       areaFileInput.remove();
     }
   };
 
-  // Funcionalidad de colapso/expansión de configuración
-  let isConfigCollapsed = true; // Inicialmente colapsado
-  
-  // Configurar estado inicial (colapsado)
-  elements.configContent.style.maxHeight = '0';
-  elements.configContent.style.padding = '0 10px';
-  elements.configToggle.style.transform = 'rotate(-90deg)';
-  
-  // Event listener para toggle de configuración
-  elements.configHeader.addEventListener('click', () => {
-    isConfigCollapsed = !isConfigCollapsed;
-    
-    if (isConfigCollapsed) {
-      // Colapsar
-      elements.configContent.style.maxHeight = '0';
-      elements.configContent.style.padding = '0 10px';
-      elements.configToggle.style.transform = 'rotate(-90deg)';
-    } else {
-      // Expandir
-      elements.configContent.style.maxHeight = '400px'; // Altura suficiente para todo el contenido
-      elements.configContent.style.padding = '10px';
-      elements.configToggle.style.transform = 'rotate(0deg)';
-    }
+  // Event listener para botón de configuración
+  elements.configBtn.addEventListener('click', async () => {
+    createConfigWindow();
   });
 
   // Event listener para botón de análisis
@@ -415,8 +458,8 @@ export function createGuardUI(texts) {
     createAnalysisWindow();
   });
 
-  // Inicializar estado del botón de reposicionamiento
-  ui.updateRepositionBtn();
+  // Inicializar estado de todos los botones
+  ui.updateButtonsState();
 
   return ui;
 }
@@ -460,12 +503,17 @@ export function showConfirmDialog(message, title, buttons = {}) {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     
+    // Registrar modal para manejo de z-index
+    registerWindow(modal);
+    
     // Event listeners
     const saveBtn = modal.querySelector('.save-btn');
     const discardBtn = modal.querySelector('.discard-btn');
     const cancelBtn = modal.querySelector('.cancel-btn');
     
     const cleanup = () => {
+      // Desregistrar modal del gestor
+      unregisterWindow(modal);
       document.body.removeChild(overlay);
     };
     
