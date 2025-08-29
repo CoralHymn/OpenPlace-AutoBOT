@@ -3,35 +3,98 @@ import { log } from '../core/logger.js';
 import { guardState } from './config.js';
 import { analyzeAreaPixels } from './processor.js';
 import { registerWindow, unregisterWindow } from '../core/window-manager.js';
-import { getGuardTexts } from '../locales/index.js';
+import { t } from '../locales/index.js';
 
 // Variables globales para la ventana
 let analysisWindowInstance = null;
 let autoRefreshInterval = null;
+let sessionRecording = false;
+let sessionData = [];
+let sessionStartTime = null;
+
+// Función para crear toggle CSS personalizado
+function createToggle(id, labelText, checked = false) {
+  return `
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; padding: 8px 0;">
+      <span style="color: #eee; font-size: 14px; flex: 1;">${labelText}</span>
+      <label class="toggle-switch" style="position: relative; display: inline-block; width: 50px; height: 26px; margin-left: 10px;">
+        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
+        <span class="toggle-slider" style="
+          position: absolute;
+          cursor: pointer;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: ${checked ? '#22c55e' : '#ef4444'};
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          border-radius: 13px;
+          border: 1px solid ${checked ? '#16a34a' : '#dc2626'};
+        "></span>
+        <span class="toggle-knob" style="
+          position: absolute;
+          height: 20px;
+          width: 20px;
+          left: ${checked ? '27px' : '3px'};
+          top: 3px;
+          background-color: white;
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          border-radius: 50%;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        "></span>
+      </label>
+    </div>
+  `;
+}
+
+// Función para actualizar el estado visual del toggle
+function updateToggleState(toggleId, checked) {
+  const toggle = document.getElementById(toggleId);
+  if (!toggle) return;
+  
+  const slider = toggle.parentElement.querySelector('.toggle-slider');
+  const knob = toggle.parentElement.querySelector('.toggle-knob');
+  
+  if (slider && knob) {
+    slider.style.backgroundColor = checked ? '#22c55e' : '#ef4444';
+    slider.style.borderColor = checked ? '#16a34a' : '#dc2626';
+    knob.style.left = checked ? '27px' : '3px';
+  }
+}
 
 
 
 // Cerrar ventana de análisis
 export function closeAnalysisWindow() {
   if (analysisWindowInstance) {
-    // Desregistrar ventana del gestor
-    unregisterWindow(analysisWindowInstance.analysisWindow);
+    const analysisWindow = analysisWindowInstance.analysisWindow;
     
-    // Limpiar interval si existe
-     if (autoRefreshInterval) {
-       window.clearInterval(autoRefreshInterval);
-       autoRefreshInterval = null;
-     }
+    // Aplicar transición de cierre suave
+    analysisWindow.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+    analysisWindow.style.opacity = '0';
+    analysisWindow.style.transform = 'scale(0.95) translateY(-20px)';
     
-    // Remover la ventana del DOM
-    if (analysisWindowInstance.analysisWindow && analysisWindowInstance.analysisWindow.parentNode) {
-      document.body.removeChild(analysisWindowInstance.analysisWindow);
-    }
-    
-    // Limpiar referencia
-    analysisWindowInstance = null;
-    
-    log('🔍 Ventana de análisis cerrada');
+    // Completar el cierre después de la transición
+    setTimeout(() => {
+      // Desregistrar ventana del gestor
+      unregisterWindow(analysisWindow);
+      
+      // Limpiar interval si existe
+      if (autoRefreshInterval) {
+        window.clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+      }
+      
+      // Remover la ventana del DOM
+      if (analysisWindow && analysisWindow.parentNode) {
+        document.body.removeChild(analysisWindow);
+      }
+      
+      // Limpiar referencia
+      analysisWindowInstance = null;
+      
+      log('🔍 Ventana de análisis cerrada');
+    }, 300);
   }
 }
 
@@ -65,6 +128,9 @@ export function createAnalysisWindow() {
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     z-index: 100002;
     backdrop-filter: blur(10px);
+    opacity: 0;
+    transform: scale(0.95) translateY(-20px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
   `;
 
   // Header de la ventana
@@ -84,9 +150,12 @@ export function createAnalysisWindow() {
   `;
   header.innerHTML = `
     <div style="display: flex; align-items: center; gap: 10px;">
-      🔍 <span>Análisis de Diferencias - JSON vs Canvas Actual</span>
+      🔍 <span>${t('guard.analysisTitle')}</span>
     </div>
-    <button id="closeAnalysisBtn" style="background: none; border: none; color: #eee; cursor: pointer; font-size: 20px; padding: 5px;">❌</button>
+    <div style="display: flex; align-items: center; gap: 5px;">
+      <button id="minimizeAnalysisBtn" style="background: none; border: none; color: #eee; cursor: pointer; font-size: 16px; padding: 5px; opacity: 0.7; transition: opacity 0.2s ease;">➖</button>
+      <button id="closeAnalysisBtn" style="background: none; border: none; color: #eee; cursor: pointer; font-size: 20px; padding: 5px;">❌</button>
+    </div>
   `;
 
   // Área de contenido principal
@@ -113,15 +182,15 @@ export function createAnalysisWindow() {
     <h3 style="margin: 0 0 15px 0; color: #60a5fa;">📊 Estadísticas</h3>
     <div style="background: #374151; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
       <div style="margin-bottom: 10px;">
-        <span style="color: #10b981;">✅ Píxeles Correctos:</span>
+        <span style="color: #10b981;">✅ ${t('guard.correctPixels')}:</span>
         <span id="correctPixels" style="float: right; font-weight: bold;">-</span>
       </div>
       <div style="margin-bottom: 10px;">
-        <span style="color: #ef4444;">❌ Píxeles Incorrectos:</span>
+        <span style="color: #ef4444;">❌ ${t('guard.incorrectPixels')}:</span>
         <span id="incorrectPixels" style="float: right; font-weight: bold;">-</span>
       </div>
       <div style="margin-bottom: 10px;">
-        <span style="color: #f59e0b;">⚪ Píxeles Faltantes:</span>
+        <span style="color: #f59e0b;">⚪ ${t('guard.missingPixels')}:</span>
         <span id="missingPixels" style="float: right; font-weight: bold;">-</span>
       </div>
       <div>
@@ -132,19 +201,22 @@ export function createAnalysisWindow() {
 
     <h3 style="margin: 0 0 15px 0; color: #60a5fa;">🎨 Visualización</h3>
     <div style="background: #374151; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-      <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
-        <input type="checkbox" id="showCorrect" checked style="margin-right: 8px;">
-        <span style="color: #10b981;">✅ Mostrar Correctos</span>
-      </label>
-      <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
-        <input type="checkbox" id="showIncorrect" checked style="margin-right: 8px;">
-        <span style="color: #ef4444;">❌ Mostrar Incorrectos</span>
-      </label>
-      <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
-        <input type="checkbox" id="showMissing" checked style="margin-right: 8px;">
-        <span style="color: #f59e0b;">⚪ Mostrar Faltantes</span>
-      </label>
+      ${createToggle('showCorrect', `✅ ${t('guard.showCorrect')}`, false)}
+      ${createToggle('showIncorrect', `❌ ${t('guard.showIncorrect')}`, true)}
+      ${createToggle('showMissing', `⚪ ${t('guard.showMissing')}`, true)}
+    </div>
 
+    <h3 style="margin: 0 0 15px 0; color: #60a5fa;">📹 Grabación</h3>
+    <div style="background: #374151; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+      ${createToggle('recordSession', '📹 Record Session', false)}
+      <button id="snapshotBtn" style="width: 100%; padding: 10px; background: #f59e0b; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 10px;">
+        📸 Snapshot
+      </button>
+      <div id="sessionControls" style="margin-top: 10px; opacity: 0; max-height: 0; overflow: hidden; transition: all 0.3s ease;">
+        <button id="downloadSession" style="width: 100%; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px;">
+          💾 Descargar Datos
+        </button>
+      </div>
     </div>
 
     <h3 style="margin: 0 0 15px 0; color: #60a5fa;">⚙️ Configuración</h3>
@@ -160,11 +232,8 @@ export function createAnalysisWindow() {
         <span id="opacityValue" style="font-size: 12px; color: #cbd5e0;">80%</span>
       </div>
       <div style="margin-bottom: 15px;">
-        <label style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;">
-          <input type="checkbox" id="autoRefresh" style="margin-right: 8px;">
-          <span style="color: #60a5fa;">🔄 Auto-refresco</span>
-        </label>
-        <div style="display: flex; align-items: center; gap: 10px;">
+        ${createToggle('autoRefresh', `🔄 ${t('guard.autoRefresh')}`, false)}
+        <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
           <label style="font-size: 12px; color: #cbd5e0;">Intervalo (s):</label>
           <input type="number" id="refreshInterval" min="1" max="60" value="5" style="width: 60px; padding: 4px; background: #4b5563; color: white; border: 1px solid #6b7280; border-radius: 4px;">
         </div>
@@ -233,6 +302,12 @@ export function createAnalysisWindow() {
   analysisWindow.appendChild(resizeHandle);
   document.body.appendChild(analysisWindow);
 
+  // Aplicar transición de apertura suave
+  setTimeout(() => {
+    analysisWindow.style.opacity = '1';
+    analysisWindow.style.transform = 'scale(1) translateY(0)';
+  }, 10);
+
   // Registrar ventana para manejo de z-index
   registerWindow(analysisWindow);
 
@@ -243,6 +318,25 @@ export function createAnalysisWindow() {
   analysisWindowInstance = { analysisWindow, canvas, controlPanel };
 
   // Event listeners
+  // Event listener para minimizar ventana
+  const minimizeBtn = header.querySelector('#minimizeAnalysisBtn');
+  minimizeBtn.addEventListener('click', () => {
+    if (content.style.display === 'none') {
+      // Restaurar ventana sin transición
+      content.style.display = 'flex';
+      minimizeBtn.textContent = '➖';
+      analysisWindow.style.height = '800px';
+    } else {
+      // Minimizar ventana sin transición
+      content.style.display = 'none';
+      analysisWindow.style.height = 'auto';
+      
+      minimizeBtn.textContent = '🔼';
+      analysisWindow.style.height = 'auto';
+    }
+  });
+
+  // Event listener para cerrar ventana
   header.querySelector('#closeAnalysisBtn').addEventListener('click', closeAnalysisWindow);
 
   // Comentado: No cerrar al hacer clic fuera de la ventana
@@ -328,6 +422,9 @@ async function refreshAnalysisData(canvas, controlPanel) {
     // Actualizar estadísticas
     updateStatistics(controlPanel, analysis);
     
+    // Registrar datos de sesión si está grabando
+    recordSessionData(analysis);
+    
     // Renderizar visualización manteniendo zoom actual
     renderVisualization(canvas, analysis);
     
@@ -371,13 +468,19 @@ async function initializeAnalysis(canvas, controlPanel) {
     const analysis = comparePixels(guardState.originalPixels, currentPixels || new Map());
     
     // Actualizar estadísticas
-    updateStatistics(controlPanel, analysis);
-    
-    // Renderizar visualización
-    renderVisualization(canvas, analysis);
+  updateStatistics(controlPanel, analysis);
+  
+  // Registrar datos de sesión si está grabando
+  recordSessionData(analysis);
+  
+  // Renderizar visualización
+  renderVisualization(canvas, analysis);
     
     // Configurar controles
   setupControls(controlPanel, canvas, analysis);
+  
+  // Configurar grabación de sesión
+  setupSessionRecording(controlPanel, analysis);
   
   // Actualizar coordenadas
   updateCoordinatesDisplay(controlPanel);
@@ -490,14 +593,15 @@ function renderVisualization(canvas, analysis) {
     imageData.data[i + 3] = 255; // A
   }
   
-  // Obtener estado de los checkboxes
-  const analysisWindow = canvas.closest('.analysis-window');
-  const panelElement = analysisWindow ? analysisWindow.querySelector('.control-panel') : null;
+  // Obtener estado de los checkboxes desde el panel de control
+  const showCorrectElement = document.querySelector('#showCorrect');
+  const showIncorrectElement = document.querySelector('#showIncorrect');
+  const showMissingElement = document.querySelector('#showMissing');
   
-  // Usar valores por defecto si no se puede acceder al panel
-  const showCorrect = panelElement ? panelElement.querySelector('#showCorrect')?.checked ?? true : true;
-  const showIncorrect = panelElement ? panelElement.querySelector('#showIncorrect')?.checked ?? true : true;
-  const showMissing = panelElement ? panelElement.querySelector('#showMissing')?.checked ?? true : true;
+  // Usar valores por defecto si no se puede acceder a los elementos
+  const showCorrect = showCorrectElement ? showCorrectElement.checked : true;
+  const showIncorrect = showIncorrectElement ? showIncorrectElement.checked : true;
+  const showMissing = showMissingElement ? showMissingElement.checked : true;
   
   log(`🎛️ Estados de visualización - Correctos: ${showCorrect}, Incorrectos: ${showIncorrect}, Faltantes: ${showMissing}`);
   
@@ -597,23 +701,24 @@ function setupControls(controlPanel, canvas, analysis) {
     canvas.style.transform = `scale(${optimalZoom})`;
     canvas.style.transformOrigin = 'top left';
     
-    log(`🔍 Zoom ajustado automáticamente a ${Math.round(optimalZoom * 100)}%`);
+    log(`🔍 ${t('guard.zoomAdjusted')} ${Math.round(optimalZoom * 100)}%`);
   });
 
   // Auto-refresco
    autoRefreshCheckbox.addEventListener('change', () => {
+     updateToggleState('autoRefresh', autoRefreshCheckbox.checked);
      if (autoRefreshCheckbox.checked) {
        const interval = parseInt(refreshIntervalInput.value) * 1000;
        autoRefreshInterval = window.setInterval(async () => {
          await refreshAnalysisData(canvas, controlPanel);
        }, interval);
-       log(`🔄 Auto-refresco activado cada ${refreshIntervalInput.value} segundos`);
+       log(`🔄 ${t('guard.autoRefreshEnabled')} ${refreshIntervalInput.value} segundos`);
      } else {
        if (autoRefreshInterval) {
          window.clearInterval(autoRefreshInterval);
          autoRefreshInterval = null;
        }
-       log('🔄 Auto-refresco desactivado');
+       log(`🔄 ${t('guard.autoRefreshDisabled')}`);
      }
    });
 
@@ -628,7 +733,7 @@ function setupControls(controlPanel, canvas, analysis) {
        autoRefreshInterval = window.setInterval(async () => {
          await refreshAnalysisData(canvas, controlPanel);
        }, interval);
-       log(`🔄 Intervalo de auto-refresco actualizado a ${refreshIntervalInput.value} segundos`);
+       log(`🔄 ${t('guard.autoRefreshIntervalUpdated')} ${refreshIntervalInput.value} segundos`);
      }
    });
   
@@ -637,11 +742,19 @@ function setupControls(controlPanel, canvas, analysis) {
     await refreshAnalysisData(canvas, controlPanel);
   });
   
-  // Checkboxes de visualización - refresco inmediato
-  const checkboxes = ['showCorrect', 'showIncorrect', 'showMissing'];
-  checkboxes.forEach(id => {
-    const checkbox = controlPanel.querySelector(`#${id}`);
-    checkbox.addEventListener('change', () => {
+  // Botón de snapshot
+  const snapshotBtn = controlPanel.querySelector('#snapshotBtn');
+  snapshotBtn.addEventListener('click', () => {
+    captureSnapshot(canvas, controlPanel);
+  });
+  
+  // Toggles de visualización - refresco inmediato
+  const toggles = ['showCorrect', 'showIncorrect', 'showMissing'];
+  toggles.forEach(id => {
+    const toggle = controlPanel.querySelector(`#${id}`);
+    toggle.addEventListener('change', () => {
+      updateToggleState(id, toggle.checked);
+      
       // Preservar el zoom actual durante el refresco
       const currentZoom = parseFloat(zoomSlider.value);
       const currentOpacity = parseFloat(opacitySlider.value);
@@ -653,7 +766,7 @@ function setupControls(controlPanel, canvas, analysis) {
       canvas.style.transformOrigin = 'top left';
       canvas.style.opacity = currentOpacity;
       
-      log(`👁️ Visualización actualizada: ${id} = ${checkbox.checked}`);
+      log(`👁️ ${t('guard.visualizationUpdated')}: ${id} = ${toggle.checked}`);
     });
   });
 
@@ -720,5 +833,175 @@ function updateCoordinatesDisplay(controlPanel) {
   } else {
     coordsUpperLeft.textContent = '--';
     coordsLowerRight.textContent = '--';
+  }
+}
+
+// Función para configurar la grabación de sesión
+function setupSessionRecording(controlPanel, analysis) {
+  const recordToggle = controlPanel.querySelector('#recordSession');
+  const sessionControls = controlPanel.querySelector('#sessionControls');
+  const downloadBtn = controlPanel.querySelector('#downloadSession');
+  
+  // Event listener para el toggle de grabación
+  recordToggle.addEventListener('change', () => {
+    // Actualizar estado visual del toggle
+    updateToggleState('recordSession', recordToggle.checked);
+    
+    if (recordToggle.checked) {
+      startSessionRecording(analysis);
+      // Mostrar controles con animación suave
+      sessionControls.style.maxHeight = '50px';
+      sessionControls.style.opacity = '1';
+    } else {
+      stopSessionRecording();
+      // Ocultar controles con animación suave
+      sessionControls.style.maxHeight = '0';
+      sessionControls.style.opacity = '0';
+    }
+  });
+  
+  // Event listener para descargar datos
+  downloadBtn.addEventListener('click', () => {
+    downloadSessionData();
+  });
+}
+
+// Función para iniciar la grabación de sesión
+function startSessionRecording(analysis) {
+  sessionRecording = true;
+  sessionData = [];
+  sessionStartTime = new Date();
+  
+  // Activar autorefresh automáticamente
+  const autoRefreshCheckbox = document.querySelector('#autoRefresh');
+  if (autoRefreshCheckbox && !autoRefreshCheckbox.checked) {
+    autoRefreshCheckbox.checked = true;
+    updateToggleState('autoRefresh', true);
+    
+    // Disparar el evento change para activar el autorefresh
+    // eslint-disable-next-line no-undef
+    autoRefreshCheckbox.dispatchEvent(new Event('change'));
+  }
+  
+  // Registrar estado inicial
+  recordSessionData(analysis);
+  
+  console.log('📹 Grabación de sesión iniciada con autorefresh activado');
+}
+
+// Función para detener la grabación de sesión
+function stopSessionRecording() {
+  sessionRecording = false;
+  
+  // Descargar automáticamente los datos al detener la grabación
+  if (sessionData.length > 0) {
+    downloadSessionData();
+  }
+  
+  console.log('⏹️ Grabación de sesión detenida');
+}
+
+// Función para registrar datos de la sesión
+function recordSessionData(analysis) {
+  if (!sessionRecording || !analysis) return;
+  
+  const timestamp = new Date();
+  const total = analysis.originalPixels?.size || 0;
+  const correctCount = analysis.correct?.size || 0;
+  const incorrectCount = analysis.incorrect?.size || 0;
+  const missingCount = analysis.missing?.size || 0;
+  const accuracy = total > 0 ? ((correctCount / total) * 100) : 0;
+  
+  const sessionEntry = {
+    timestamp: timestamp.toISOString(),
+    timeFromStart: timestamp - sessionStartTime,
+    correct: correctCount,
+    incorrect: incorrectCount,
+    missing: missingCount,
+    total: total,
+    precision: parseFloat(accuracy.toFixed(1))
+  };
+  
+  sessionData.push(sessionEntry);
+}
+
+// Función para descargar los datos de la sesión
+function downloadSessionData() {
+  if (sessionData.length === 0) {
+    alert('No hay datos de sesión para descargar');
+    return;
+  }
+  
+  const sessionSummary = {
+    sessionStart: sessionStartTime?.toISOString(),
+    sessionEnd: new Date().toISOString(),
+    totalDuration: sessionStartTime ? new Date() - sessionStartTime : 0,
+    totalEntries: sessionData.length,
+    data: sessionData,
+    summary: {
+      finalCorrect: sessionData[sessionData.length - 1]?.correct || 0,
+      finalIncorrect: sessionData[sessionData.length - 1]?.incorrect || 0,
+      finalMissing: sessionData[sessionData.length - 1]?.missing || 0,
+      finalPrecision: sessionData[sessionData.length - 1]?.precision || 0
+    }
+  };
+  
+  // eslint-disable-next-line no-undef
+  const blob = new Blob([JSON.stringify(sessionSummary, null, 2)], {
+    type: 'application/json'
+  });
+  
+  // eslint-disable-next-line no-undef
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `session-data-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // eslint-disable-next-line no-undef
+  URL.revokeObjectURL(url);
+  
+  console.log('💾 Datos de sesión descargados');
+}
+
+// Función para capturar snapshot del canvas
+function captureSnapshot(canvas, controlPanel) {
+  try {
+    // Obtener la precisión actual
+    const accuracyElement = controlPanel.querySelector('#accuracy');
+    const accuracy = accuracyElement ? accuracyElement.textContent.replace('%', '') : '0';
+    
+    // Crear un canvas temporal para capturar la imagen sin transformaciones
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Configurar el canvas temporal con las mismas dimensiones
+    tempCanvas.width = canvas.width;
+    tempCanvas.height = canvas.height;
+    
+    // Copiar el contenido del canvas original
+    tempCtx.drawImage(canvas, 0, 0);
+    
+    // Convertir a blob y descargar
+     tempCanvas.toBlob((blob) => {
+       const link = document.createElement('a');
+       // eslint-disable-next-line no-undef
+       link.href = URL.createObjectURL(blob);
+      
+      // Crear nombre de archivo con timestamp y precisión
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      link.download = `snapshot-${timestamp}-precision-${accuracy}%.png`;
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      log(`📸 Snapshot capturado: precisión ${accuracy}%`);
+    }, 'image/png');
+    
+  } catch (error) {
+    log('❌ Error al capturar snapshot:', error);
+    alert('❌ Error al capturar la imagen');
   }
 }

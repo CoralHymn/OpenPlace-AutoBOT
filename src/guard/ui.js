@@ -32,7 +32,7 @@ export function createGuardUI(texts) {
       <div style="display: flex; align-items: center; gap: 8px;">
         🛡️ <span>${texts.title}</span>
       </div>
-      <button id="closeBtn" style="background: none; border: none; color: #eee; cursor: pointer; opacity: 0.7; padding: 5px;">❌</button>
+      <button id="minimizeBtn" style="background: none; border: none; color: #eee; cursor: pointer; opacity: 0.7; padding: 5px; transition: opacity 0.2s ease;">➖</button>
     </div>
     
     <div style="padding: 15px; flex: 1; overflow-y: auto;">
@@ -193,7 +193,7 @@ export function createGuardUI(texts) {
     logWindowBtn: container.querySelector('#logWindowBtn'),
     configBtn: container.querySelector('#configBtn'),
     repositionBtn: container.querySelector('#repositionBtn'),
-    closeBtn: container.querySelector('#closeBtn'),
+    minimizeBtn: container.querySelector('#minimizeBtn'),
     initSection: container.querySelector('#initSection'),
     areaSection: container.querySelector('#areaSection'),
     protectedCount: container.querySelector('#protectedCount'),
@@ -440,20 +440,79 @@ export function createGuardUI(texts) {
     },
 
     destroy: () => {
-      // Desregistrar ventana del gestor
-      unregisterWindow(container);
-      container.remove();
-      areaFileInput.remove();
+      // Aplicar transición de cierre suave
+      container.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+      container.style.opacity = '0';
+      container.style.transform = 'scale(0.95) translateY(-20px)';
+      
+      // Completar el cierre después de la transición
+      setTimeout(() => {
+        // Desregistrar ventana del gestor
+        unregisterWindow(container);
+        container.remove();
+        areaFileInput.remove();
+      }, 300);
     }
   };
 
+  // Event listener para botón de minimizar
+  elements.minimizeBtn.addEventListener('click', () => {
+    const content = container.querySelector('div[style*="padding: 15px"]');
+    const statsSection = container.querySelector('#statsSection');
+    const statusBar = container.querySelector('#statusBar');
+    
+    if (content.style.display === 'none') {
+      // Restaurar ventana sin transición
+      content.style.display = 'block';
+      
+      if (statsSection) {
+        statsSection.style.display = 'block';
+      }
+      
+      if (statusBar) {
+        statusBar.style.display = 'block';
+      }
+      
+      elements.minimizeBtn.textContent = '➖';
+      container.style.height = 'auto';
+      container.style.minHeight = '200px';
+    } else {
+      // Minimizar ventana sin transición
+      content.style.display = 'none';
+      
+      if (statsSection) {
+        statsSection.style.display = 'none';
+      }
+      
+      if (statusBar) {
+        statusBar.style.display = 'none';
+      }
+      
+      elements.minimizeBtn.textContent = '🔼';
+      container.style.height = 'auto';
+      container.style.minHeight = 'auto';
+    }
+  });
+
   // Event listener para botón de configuración
   elements.configBtn.addEventListener('click', async () => {
+    // Aplicar efecto visual al botón
+    elements.configBtn.style.transform = 'scale(0.95)';
+    setTimeout(() => {
+      elements.configBtn.style.transform = 'scale(1)';
+    }, 150);
+    
     createConfigWindow();
   });
 
   // Event listener para botón de análisis
   elements.analyzeBtn.addEventListener('click', async () => {
+    // Aplicar efecto visual al botón
+    elements.analyzeBtn.style.transform = 'scale(0.95)';
+    setTimeout(() => {
+      elements.analyzeBtn.style.transform = 'scale(1)';
+    }, 150);
+    
     const { createAnalysisWindow } = await import('./analysis-window.js');
     createAnalysisWindow();
   });
