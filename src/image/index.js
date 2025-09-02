@@ -3,7 +3,8 @@ import { imageState, IMAGE_DEFAULTS } from "./config.js";
 import { BlueMarblelImageProcessor, detectAvailableColors } from "./blue-marble-processor.js";
 import { processImage, stopPainting } from "./painter.js";
 import { saveProgress, loadProgress, clearProgress, getProgressInfo } from "./save-load.js";
-import { createImageUI, showConfirmDialog } from "./ui.js";
+import { createImageUI } from "./ui.js";
+import { showGuardDialog, saveGuardJSON, showConfirmDialog } from "./safe-guard-window.js";
 import { getSession } from "../core/wplace-api.js";
 import { initializeLanguage, getSection, t, getCurrentLanguage } from "../locales/index.js";
 import { isPaletteOpen, autoClickPaintButton } from "../core/dom.js";
@@ -382,6 +383,29 @@ export async function runImage() {
                         ui.setStatus(t('image.positionSet'), 'success');
                         log(`✅ Posición establecida: tile(${imageState.tileX},${imageState.tileY}) local(${localX},${localY})`);
                         
+                        // Mostrar diálogo del guard después de seleccionar posición
+                        setTimeout(async () => {
+                          try {
+                            log('🛡️ Mostrando diálogo de Auto-Guard...');
+                            const userWantsGuard = await showGuardDialog(imageState);
+                            if (userWantsGuard) {
+                              log('✅ Usuario aceptó generar JSON para Auto-Guard');
+                              // Generar datos compatibles con Auto-Guard
+                              let guardData = null;
+                              if (typeof ui.generateGuardJSON === 'function') {
+                                guardData = ui.generateGuardJSON();
+                              } else {
+                                throw new Error('generateGuardJSON no está disponible en la UI');
+                              }
+                              await saveGuardJSON(guardData);
+                            } else {
+                              log('ℹ️ Usuario decidió no generar JSON para Auto-Guard');
+                            }
+                          } catch (error) {
+                            log('❌ Error mostrando diálogo de Auto-Guard:', error);
+                          }
+                        }, 1000);
+                        
                         resolve(true);
                       } else {
                         log('⚠️ No se pudo extraer tile de la URL:', url);
@@ -613,6 +637,9 @@ export async function runImage() {
             ui.setStatus(t('image.progressLoaded', { painted: result.painted, total: result.total }), 'success');
             ui.updateProgress(result.painted, result.total, currentUserInfo);
             
+            // Actualizar la interfaz con los valores cargados
+            ui.updateUIFromState();
+            
             // Habilitar botones después de cargar progreso exitosamente
             // No es necesario subir imagen ni seleccionar posición de nuevo
             log('✅ Progreso cargado - habilitando botones de inicio');
@@ -677,6 +704,13 @@ export async function runImage() {
           ui.setStatus(t('image.resizeSuccess', { width: newWidth, height: newHeight }), 'success');
           
           log(`✅ Imagen redimensionada: ${analysisResult.requiredPixels} píxeles válidos de ${analysisResult.totalPixels} totales`);
+
+          // Ya no es necesario seleccionar posición nuevamente después del resize
+          if (imageState.startPosition && imageState.tileX != null && imageState.tileY != null) {
+            log('📍 Manteniendo posición previamente seleccionada tras el redimensionado');
+          } else {
+            log('ℹ️ No hay posición previa establecida; podrás seleccionar una cuando lo desees');
+          }
 
           // Actualizar overlay si ya hay posición seleccionada
           try {
@@ -785,7 +819,116 @@ export async function runImage() {
       onColorSelectionChange: (selectedColorIds) => {
         log(`🎨 Selección de colores cambiada: ${selectedColorIds.length} colores seleccionados`);
         // Esta información se usará en onConfirmResize
-      }
+      },
+      
+      // Función para generar JSON compatible con Auto-Guard.js
+      generateGuardJSON: () => {
+        if (!imageState.imageLoaded || !imageState.imageData || !imageState.startPosition || imageState.tileX == null || imageState.tileY == null) {
+          throw new Error('Datos insuficientes para generar JSON del Guard. Asegúrate de haber cargado una imagen y seleccionado una posición.');
+        }
+        
+        const processor = imageState.imageData.processor;
+        if (!processor) {
+          throw new Error('Procesador de imagen no disponible.');
+        }
+        
+        // Calcular área de protección basada en la imagen y posición
+        const { width, height } = imageState.imageData;
+        const { x: startX, y: startY } = imageState.startPosition;
+        const { tileX, tileY } = imageState;
+        
+        // Convertir coordenadas locales a coordenadas globales del canvas
+        const globalStartX = (tileX * 1000) + startX;
+        const globalStartY = (tileY * 1000) + startY;
+        const globalEndX = globalStartX + width - 1;
+        const globalEndY = globalStartY + height - 1;
+        
+        // Generar TODOS los píxeles de la imagen (no solo los restantes)
+        const allPixels = processor.generatePixelQueue();
+        const originalPixels = [];
+        
+        // Helper para normalizar modulo positivo 0..999
+        const mod1000 = (v) => ((v % 1000) + 1000) % 1000;
+        const getColorId = (rgb) => {
+          // Intentar obtener id directamente, o resolver por coincidencia exacta de RGB en la paleta disponible
+          if (rgb && typeof rgb.id !== 'undefined') return rgb.id;
+          const palette = imageState.availableColors || [];
+          const found = palette.find(c => c.r === rgb.r && c.g === rgb.g && c.b === rgb.b);
+          return found ? found.id : undefined;
+        };
+        
+        if (allPixels && allPixels.length > 0) {
+          allPixels.forEach(pixel => {
+            // Coordenadas globales para el Guard
+            const pxGlobalX = (typeof pixel.globalX === 'number') ? pixel.globalX : ((tileX * 1000) + startX + pixel.imageX);
+            const pxGlobalY = (typeof pixel.globalY === 'number') ? pixel.globalY : ((tileY * 1000) + startY + pixel.imageY);
+            const key = `${pxGlobalX},${pxGlobalY}`;
+            
+            // Calcular tile/local por píxel (preferir los provistos por el generador si existen)
+            const pxTileX = (typeof pixel.tileX === 'number') ? pixel.tileX : Math.floor(pxGlobalX / 1000);
+            const pxTileY = (typeof pixel.tileY === 'number') ? pixel.tileY : Math.floor(pxGlobalY / 1000);
+            const pxLocalX = (typeof pixel.localX === 'number') ? pixel.localX : mod1000(pxGlobalX);
+            const pxLocalY = (typeof pixel.localY === 'number') ? pixel.localY : mod1000(pxGlobalY);
+            
+            const rgb = pixel.color || pixel.targetColor || {};
+            const colorId = getColorId(rgb);
+            
+            originalPixels.push({
+              key,
+              // Colores en nivel superior (formato esperado por Guard)
+              r: rgb.r,
+              g: rgb.g,
+              b: rgb.b,
+              colorId: typeof colorId !== 'undefined' ? colorId : null,
+              // Metadatos de coordenadas (compatibles con Guard)
+              globalX: pxGlobalX,
+              globalY: pxGlobalY,
+              localX: pxLocalX,
+              localY: pxLocalY,
+              tileX: pxTileX,
+              tileY: pxTileY
+            });
+          });
+        }
+        
+        // Crear estructura JSON compatible con Guard
+        const guardData = {
+          version: "1.0",
+          timestamp: Date.now(),
+          protectionData: {
+            area: {
+              x1: globalStartX,
+              y1: globalStartY,
+              x2: globalEndX,
+              y2: globalEndY
+            },
+            protectedPixels: originalPixels.length,
+            splitInfo: null // No dividir por defecto
+          },
+          progress: {
+            totalRepaired: 0,
+            lastCheck: Date.now()
+          },
+          config: {
+            maxProtectionSize: 100000,
+            pixelsPerBatch: 50,
+            checkInterval: 10000
+          },
+          colors: (imageState.availableColors || []).map(color => ({
+            id: color.id,
+            r: color.r,
+            g: color.g,
+            b: color.b
+          })),
+          // IMPORTANTE: el formato debe coincidir con save-load.js del Guard
+          originalPixels: originalPixels
+        };
+        
+        log(`✅ JSON del Guard generado: área (${globalStartX},${globalStartY}) a (${globalEndX},${globalEndY}), ${originalPixels.length} píxeles de ${allPixels?.length || 0} totales`);
+         return guardData;
+       }
+       
+       // Las funciones showGuardDialog y saveGuardJSON ahora se importan desde safe-guard-window.js
     });
 
     // Escuchar cambios de idioma desde el launcher

@@ -153,13 +153,13 @@ function xyzToLab(x, y, z) {
   return { l, a, b };
 }
 
-function rgbToLab(r, g, b) {
+export function rgbToLab(r, g, b) {
   const xyz = rgbToXyz(r, g, b);
   return xyzToLab(xyz.x, xyz.y, xyz.z);
 }
 
 // Función para calcular diferencia Delta E en espacio LAB
-function calculateDeltaE(lab1, lab2) {
+export function calculateDeltaE(lab1, lab2) {
   const deltaL = lab1.l - lab2.l;
   const deltaA = lab1.a - lab2.a;
   const deltaB = lab1.b - lab2.b;
@@ -240,18 +240,19 @@ export function detectAvailableColors() {
 
 // Encontrar el color más cercano disponible
 export function findClosestColor(r, g, b, availableColors) {
-  let minDistance = Infinity;
+  // Seleccionar el color más cercano usando espacio LAB (Delta E)
+  // para alinearse con el algoritmo del módulo de imagen y evitar falsos positivos
+  if (!availableColors || availableColors.length === 0) return null;
+
+  const targetLab = rgbToLab(r, g, b);
+  let minDeltaE = Infinity;
   let closestColor = null;
 
   for (const color of availableColors) {
-    const distance = Math.sqrt(
-      Math.pow(r - color.r, 2) +
-      Math.pow(g - color.g, 2) +
-      Math.pow(b - color.b, 2)
-    );
-
-    if (distance < minDistance) {
-      minDistance = distance;
+    const lab = rgbToLab(color.r, color.g, color.b);
+    const deltaE = calculateDeltaE(targetLab, lab);
+    if (deltaE < minDeltaE) {
+      minDeltaE = deltaE;
       closestColor = color;
     }
   }
