@@ -3,7 +3,8 @@ import { postPixelBatchImage } from "../core/wplace-api.js";
 import { generateMultipleCoords, generateMultipleColors } from "./coords.js";
 import { sleep, sleepWithCountdown } from "../core/timing.js";
 import { log } from "../core/logger.js";
-import { pixelsPainted } from "../core/metrics/client.js";
+import { pixelsPainted, sessionPing } from "../core/metrics/client.js";
+import { getMetricsConfig } from "../core/metrics/config.js";
 
 // Update canvas pixel function
 export async function updateCanvasPixel(localX, localY, color) {
@@ -106,7 +107,8 @@ export async function paintOnce(cfg, state, setStatus, flashEffect, getSession, 
   const firstLocalX = coords[0];
   const firstLocalY = coords[1];
   
-  setStatus(`🌾 Farmeando ${pixelCount} píxeles en radio ${cfg.FARM_RADIUS}px desde (${cfg.BASE_X},${cfg.BASE_Y}) tile(${cfg.TILE_X},${cfg.TILE_Y})...`, 'status');
+  // Mensaje neutro (pintado lineal); no mencionar radio
+  setStatus(`🌾 Pintando ${pixelCount} píxeles desde base (${cfg.BASE_X},${cfg.BASE_Y}) tile(${cfg.TILE_X},${cfg.TILE_Y})...`, 'status');
   
   const t = await ensureToken();
   // Usar el mismo formato que Auto-Image: text/plain con { colors, coords, t }
@@ -142,8 +144,21 @@ export async function paintOnce(cfg, state, setStatus, flashEffect, getSession, 
     // Actualizar la sesión para obtener las cargas actualizadas (única consulta tras pintar)
     await getSession();
     
-  setStatus(`✅ Lote pintado: ${actualPainted}/${pixelCount} píxeles en zona (${cfg.BASE_X},${cfg.BASE_Y}) radio ${cfg.FARM_RADIUS}px`, 'success');
+  // Mensaje de éxito sin referencia a radio
+  setStatus(`✅ Lote pintado: ${actualPainted}/${pixelCount} píxeles en zona (${cfg.BASE_X},${cfg.BASE_Y})`, 'success');
   try { pixelsPainted(actualPainted, { botVariant: 'auto-farm', metadata: { tileX: cfg.TILE_X, tileY: cfg.TILE_Y } }); } catch {}
+    // Ping de presencia como respaldo si ha pasado suficiente tiempo desde el último
+    try {
+      const mcfg = getMetricsConfig();
+      const minGap = Math.max(60_000, mcfg.PING_INTERVAL_MS || 120_000);
+      const now = Date.now();
+      const last = (window.__wplaceMetrics || {}).farmLastPing || 0;
+      if (now - last >= minGap) {
+        sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'after-paint' } });
+        window.__wplaceMetrics = window.__wplaceMetrics || {};
+        window.__wplaceMetrics.farmLastPing = now;
+      }
+    } catch {}
     flashEffect();
     
     // Emitir evento personalizado para notificar que se pintó un lote
@@ -249,11 +264,35 @@ export async function loop(cfg, state, setStatus, flashEffect, getSession, check
     try {
       // Actualizar estadísticas antes de cada ciclo
       await updateStats();
+      // Ping de presencia al entrar en el ciclo si llevamos tiempo sin reportar
+    try {
+        const mcfg = getMetricsConfig();
+        const minGap = Math.max(60_000, mcfg.PING_INTERVAL_MS || 120_000);
+        const now = Date.now();
+        const last = (window.__wplaceMetrics || {}).farmLastPing || 0;
+        if (now - last >= minGap) {
+          sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'loop' } });
+          window.__wplaceMetrics = window.__wplaceMetrics || {};
+          window.__wplaceMetrics.farmLastPing = now;
+        }
+      } catch {}
       
       // Verificar si hay cargas suficientes para pintar
       if (state.charges.count < cfg.MIN_CHARGES) {
         const waitTime = Math.max(0, (cfg.MIN_CHARGES - state.charges.count) * cfg.CHARGE_REGEN_MS);
         setStatus(`⏳ Esperando cargas: ${state.charges.count.toFixed(1)}/${cfg.MIN_CHARGES} (${Math.round(waitTime/1000)}s)`, 'status');
+        // Durante esperas largas, emitir ping de presencia al inicio de la espera si aplica
+    try {
+          const mcfg = getMetricsConfig();
+          const minGap = Math.max(60_000, mcfg.PING_INTERVAL_MS || 120_000);
+          const now = Date.now();
+          const last = (window.__wplaceMetrics || {}).farmLastPing || 0;
+          if (now - last >= minGap) {
+            sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'waiting-charges' } });
+            window.__wplaceMetrics = window.__wplaceMetrics || {};
+            window.__wplaceMetrics.farmLastPing = now;
+          }
+        } catch {}
         
         await sleepWithCountdown(Math.min(waitTime, cfg.DELAY_MS), (remaining) => {
           setStatus(`⏳ Esperando cargas: ${state.charges.count.toFixed(1)}/${cfg.MIN_CHARGES} (~${Math.round(remaining/1000)}s)`, 'status');

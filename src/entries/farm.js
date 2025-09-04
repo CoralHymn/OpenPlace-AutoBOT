@@ -1,13 +1,15 @@
 import { log } from "../core/logger.js";
 import { farmState, FARM_DEFAULTS } from "../farm/config.js";
 import { loadFarmCfg, saveFarmCfg, resetToSafeDefaults } from "../core/storage.js";
-import { getSession, checkHealth } from "../core/wplace-api.js";
+import { getSession, checkHealth, purchaseProduct } from "../core/wplace-api.js";
 import { createFarmUI, autoCalibrateTile } from "../farm/ui.js";
 import { loop, paintWithRetry } from "../farm/loop.js";
 import { coordinateCapture } from "../core/capture.js";
 import { clamp } from "../core/utils.js";
 import { initializeLanguage, t } from "../locales/index.js";
 import { autoClickPaintButton } from "../core/dom.js";
+import { sessionStart, sessionPing, sessionEnd } from "../core/metrics/client.js";
+import { getMetricsConfig } from "../core/metrics/config.js";
 
 (async function() {
   'use strict';
@@ -43,6 +45,32 @@ import { autoClickPaintButton } from "../core/dom.js";
   // Marcar que el farm bot está ejecutándose
   window.__wplaceBot.farmRunning = true;
 
+  // ---------- Métricas: iniciar sesión y pings (igual a Auto-Guard) ----------
+  try {
+    const mcfg = getMetricsConfig({ VARIANT: 'auto-farm' });
+    if (mcfg.ENABLED) {
+      if (!window.__wplaceMetrics) window.__wplaceMetrics = {};
+      const pingEvery = Math.max(60_000, mcfg.PING_INTERVAL_MS || 300_000);
+      window.__wplaceMetrics.farmSessionActive = true;
+      sessionStart({ botVariant: 'auto-farm' });
+      // Ping rápido tras el inicio para reflejar presencia inmediata
+      setTimeout(() => {
+        try { sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'init' } }); } catch {}
+      }, 3000);
+      // Intervalo periódico
+  window.__wplaceMetrics.farmPingInterval = window.setInterval(() => {
+        try { sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'interval' } }); } catch {}
+      }, pingEvery);
+      // Pings por visibilidad/foco
+      const visibilityHandler = () => { if (!document.hidden) { try { sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'visibility' } }); } catch {} } };
+      const focusHandler = () => { try { sessionPing({ botVariant: 'auto-farm', metadata: { reason: 'focus' } }); } catch {} };
+      document.addEventListener('visibilitychange', visibilityHandler);
+      window.addEventListener('focus', focusHandler);
+      window.__wplaceMetrics.farmVisibilityHandler = visibilityHandler;
+      window.__wplaceMetrics.farmFocusHandler = focusHandler;
+    }
+  } catch {}
+
   // Listen for language changes
   window.addEventListener('languageChanged', () => {
     if (window.__wplaceBot?.ui?.updateTexts) {
@@ -76,10 +104,19 @@ import { autoClickPaintButton } from "../core/dom.js";
       if (result.success) {
         cfg.TILE_X = result.tileX;
         cfg.TILE_Y = result.tileY;
-        saveFarmCfg(cfg);
-        ui.updateConfig();
-        ui.setStatus(`🎯 Coordenadas capturadas: tile(${result.tileX},${result.tileY})`, 'success');
-        log(`✅ Coordenadas capturadas automáticamente: tile(${result.tileX},${result.tileY})`);
+        // Guardar posición base local y marcar selección
+        if (Number.isFinite(result.localX) && Number.isFinite(result.localY)) {
+          cfg.BASE_X = result.localX;
+          cfg.BASE_Y = result.localY;
+          cfg.POSITION_SELECTED = true;
+        }
+  saveFarmCfg(cfg);
+  // Refrescar UI tras guardar
+  ui.updateConfig();
+  // Pequeño retraso para asegurar que el Shadow DOM refleja el cambio
+  setTimeout(() => ui.updateConfig(), 50);
+        ui.setStatus(`🎯 Zona lista: tile(${result.tileX},${result.tileY}) base(${cfg.BASE_X},${cfg.BASE_Y})`, 'success');
+        log(`✅ Coordenadas capturadas: tile(${result.tileX},${result.tileY}) base(${cfg.BASE_X},${cfg.BASE_Y})`);
       } else {
         ui.setStatus(`❌ ${t('common.error', 'No se pudieron capturar coordenadas')}`, 'error');
       }
@@ -107,11 +144,13 @@ import { autoClickPaintButton } from "../core/dom.js";
   async function updateStats() {
     try {
       const session = await getSession();
-      if (session.success && session.data) {
+  if (session.success && session.data) {
         farmState.charges.count = session.data.charges || 0;
         farmState.charges.max = session.data.maxCharges || 50;
         farmState.charges.regen = session.data.chargeRegen || 30000;
         farmState.user = session.data.user;
+        // droplets
+        farmState.droplets = session.data.droplets ?? (session.data.user?.droplets ?? 0);
         
         // Actualizar configuración con datos de la sesión
         cfg.CHARGE_REGEN_MS = farmState.charges.regen;
@@ -121,6 +160,36 @@ import { autoClickPaintButton } from "../core/dom.js";
         farmState.health = health;
         
         ui.updateStats(farmState.painted, farmState.charges.count, farmState.retryCount, health);
+        // Auto-compra: si está habilitado y tenemos >= 500 droplets
+        try {
+          if (cfg.AUTO_BUY_ENABLED && (farmState.droplets || 0) >= 500) {
+            ui.setStatus(t('farm.autobuy.buying','Comprando automáticamente...'), 'status');
+            const res = await purchaseProduct(70, 1);
+            if (res.success) {
+              if (ui.notify) ui.notify(t('farm.autobuy.bought','Compra OK. Actualizando sesión...'), 'success');
+              ui.setStatus(t('farm.autobuy.bought','Compra OK. Actualizando sesión...'), 'success');
+              // Restar 500 droplets inmediatamente en UI
+              try {
+                farmState.droplets = Math.max(0, (farmState.droplets || 0) - 500);
+                ui.updateStats(farmState.painted, farmState.charges.count, farmState.retryCount, farmState.health);
+              } catch {}
+              // Reconsultar sesión para reflejar nuevas cargas/droplets
+              const after = await getSession();
+              if (after.success && after.data) {
+                farmState.charges.count = after.data.charges || farmState.charges.count;
+                farmState.charges.max = after.data.maxCharges || farmState.charges.max;
+                farmState.droplets = after.data.droplets ?? farmState.droplets;
+                farmState.user = after.data.user || farmState.user;
+                ui.updateStats(farmState.painted, farmState.charges.count, farmState.retryCount, farmState.health);
+              }
+            } else {
+              if (ui.notify) ui.notify(t('farm.autobuy.failed','No se pudo comprar automáticamente'), 'error');
+              ui.setStatus(t('farm.autobuy.failed','No se pudo comprar automáticamente'), 'error');
+            }
+          }
+        } catch(e) {
+          console.warn('Auto-buy error:', e);
+        }
         return session.data;
       }
       return null;
@@ -233,6 +302,22 @@ import { autoClickPaintButton } from "../core/dom.js";
   if (captureBtn) {
     captureBtn.addEventListener('click', enableCaptureOnce);
   }
+
+  // Fallback: escuchar evento global de captura por si el callback no llega
+  window.addEventListener('wplace-capture', (ev) => {
+    try {
+      const d = ev?.detail || window.__wplaceLastCapture;
+      if (!d || !d.success) return;
+      cfg.TILE_X = d.tileX; cfg.TILE_Y = d.tileY;
+      if (Number.isFinite(d.localX) && Number.isFinite(d.localY)) {
+        cfg.BASE_X = d.localX; cfg.BASE_Y = d.localY; cfg.POSITION_SELECTED = true;
+      }
+      saveFarmCfg(cfg);
+      ui.updateConfig();
+      setTimeout(() => ui.updateConfig(), 50);
+      ui.setStatus(`🎯 Zona lista: tile(${d.tileX},${d.tileY}) base(${cfg.BASE_X},${cfg.BASE_Y})`, 'success');
+    } catch {}
+  });
 
   // Configurar el botón "Una vez"
   const onceBtn = ui.getElement().shadowRoot.getElementById('once-btn');
@@ -392,6 +477,28 @@ import { autoClickPaintButton } from "../core/dom.js";
     }
     coordinateCapture.disable();
     ui.destroy();
+    // Limpiar métricas
+    try {
+      const mcfg = getMetricsConfig();
+      if (mcfg.ENABLED) {
+        if (window.__wplaceMetrics?.farmPingInterval) {
+          window.clearInterval(window.__wplaceMetrics.farmPingInterval);
+          window.__wplaceMetrics.farmPingInterval = null;
+        }
+        if (window.__wplaceMetrics?.farmVisibilityHandler) {
+          document.removeEventListener('visibilitychange', window.__wplaceMetrics.farmVisibilityHandler);
+          delete window.__wplaceMetrics.farmVisibilityHandler;
+        }
+        if (window.__wplaceMetrics?.farmFocusHandler) {
+          window.removeEventListener('focus', window.__wplaceMetrics.farmFocusHandler);
+          delete window.__wplaceMetrics.farmFocusHandler;
+        }
+        if (window.__wplaceMetrics?.farmSessionActive) {
+          sessionEnd({ botVariant: 'auto-farm' });
+          window.__wplaceMetrics.farmSessionActive = false;
+        }
+      }
+    } catch {}
   });
 
   log('✅ Farm Bot inicializado correctamente');
