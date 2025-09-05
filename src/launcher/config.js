@@ -1,7 +1,7 @@
 import { getSection } from '../locales/index.js';
 
 export const LAUNCHER_CONFIG = {
-  RAW_BASE: 'https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOT/refs/heads/main',
+  // Eliminamos RAW_BASE ya que ahora ejecutamos bots localmente
   REFRESH_INTERVAL: 60000, // 1 minuto
   THEME: {
     primary: '#000000',
@@ -11,7 +11,10 @@ export const LAUNCHER_CONFIG = {
     highlight: '#775ce3',
     success: '#00ff00',
     error: '#ff0000'
-  }
+  },
+  // Nueva configuración para ejecución local
+  LOCAL_EXECUTION: true,
+  TURNSTILE_INTEGRATION: true
 };
 
 // Esta función ahora retorna las traducciones dinámicamente
@@ -46,5 +49,8 @@ export const launcherState = {
   me: null,
   health: null,
   refreshTimer: null,
-  selectedBot: null
+  selectedBot: null,
+  // Nuevo estado para tracking de bots locales
+  runningBots: new Set(),
+  turnstileSystem: null
 };

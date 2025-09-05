@@ -1,11 +1,73 @@
 import { log } from "../core/logger.js";
 import { createLauncherUI } from "./ui.js";
-import { getSession, checkHealth, downloadAndExecuteBot } from "../core/wplace-api.js";
+import { getSession, checkHealth } from "../core/wplace-api.js";
 import { launcherState, LAUNCHER_CONFIG } from "./config.js";
 import { initializeLanguage } from "../locales/index.js";
 import { createLanguageSelector } from "../core/language-selector.js";
 import { sessionStart, sessionPing, sessionEnd, trackEvent } from "../core/metrics/client.js";
 import { getMetricsConfig } from "../core/metrics/config.js";
+// Importar directamente los módulos de los bots para ejecución local
+import { runFarm } from "../farm/index.js";
+import { runImage } from "../image/index.js";
+import { runGuard } from "../guard/index.js";
+// Importar el sistema de turnstile para compartir tokens
+import { ensureToken, invalidateToken, getPawtectToken, getFingerprint } from "../core/turnstile.js";
+
+// Función para ejecutar bots localmente con acceso completo al sistema de tokens
+async function executeLocalBot(botType) {
+  log(`🎯 Ejecutando bot local: ${botType}`);
+  
+  try {
+    // Verificar que no haya otros bots ejecutándose
+    if (window.__wplaceBot?.farmRunning || window.__wplaceBot?.imageRunning || window.__wplaceBot?.guardRunning) {
+      throw new Error("Ya hay un bot ejecutándose. Ciérralo antes de lanzar otro.");
+    }
+    
+    // Inicializar el estado global si no existe
+    if (!window.__wplaceBot) {
+      window.__wplaceBot = {};
+    }
+    
+    // Asegurar que el sistema de turnstile esté disponible globalmente
+    window.__WPA_TURNSTILE_SYSTEM__ = {
+      ensureToken,
+      invalidateToken,
+      getPawtectToken,
+      getFingerprint
+    };
+    
+    // Ejecutar el bot correspondiente
+    switch (botType) {
+      case 'farm':
+        log('🌾 Iniciando Auto-Farm...');
+        window.__wplaceBot.farmRunning = true;
+        await runFarm();
+        break;
+      case 'image':
+        log('🎨 Iniciando Auto-Image...');
+        window.__wplaceBot.imageRunning = true;
+        await runImage();
+        break;
+      case 'guard':
+        log('🛡️ Iniciando Auto-Guard...');
+        window.__wplaceBot.guardRunning = true;
+        await runGuard();
+        break;
+      default:
+        throw new Error(`Tipo de bot desconocido: ${botType}`);
+    }
+    
+    log(`✅ Bot ${botType} ejecutado exitosamente`);
+    
+  } catch (error) {
+    log(`❌ Error ejecutando bot ${botType}:`, error);
+    // Limpiar estado en caso de error
+    if (window.__wplaceBot) {
+      window.__wplaceBot[`${botType}Running`] = false;
+    }
+    throw error;
+  }
+}
 
 export async function runLauncher() {
   log('🚀 Iniciando WPlace Auto-Launcher (versión modular)');
@@ -60,8 +122,8 @@ export async function runLauncher() {
       
       onLaunch: async (botType) => {
         log(`🚀 Lanzando bot: ${botType}`);
-  try { trackEvent('launcher_start_bot', { botVariant: 'launcher', metadata: { botType } }); } catch {}
-        await downloadAndExecuteBot(botType, LAUNCHER_CONFIG.RAW_BASE);
+        try { trackEvent('launcher_start_bot', { botVariant: 'launcher', metadata: { botType } }); } catch {}
+        await executeLocalBot(botType);
       },
       
       onClose: () => {

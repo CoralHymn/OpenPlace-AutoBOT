@@ -184,6 +184,9 @@ export function createLauncherUI({
         </div>
       </div>
       <div class="status status-text">${texts.chooseBot}</div>
+      <div class="info-box" style="margin: 10px 0; padding: 8px; background: rgba(119, 92, 227, 0.1); border-radius: 6px; font-size: 12px; color: #b8b8b8;">
+        💡 ${texts.localExecution || 'Ejecución local con acceso completo al sistema de tokens'}
+      </div>
       <div class="row" style="margin-top: 12px;">
         <button class="btn primary launch-btn" disabled>${texts.launch}</button>
         <button class="btn ghost cancel-btn">${texts.close}</button>

@@ -30,7 +30,9 @@ export const es = {
     logWindowTitle: 'Logs - {botName}',
     downloadLogs: 'Descargar Logs',
     clearLogs: 'Limpiar Logs',
-    closeLogs: 'Cerrar'
+    closeLogs: 'Cerrar',
+    localExecution: 'Ejecución local con acceso completo al sistema de tokens',
+    botStarting: 'Bot iniciando...'
   },
 
   // Image Module
