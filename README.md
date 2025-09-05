@@ -1,6 +1,5 @@
-> ⚠️ **Important notice (EN)**  
-> Do **NOT** use the launcher or the Chrome extension.  
-> Always run the bot directly from the specific bookmarklet you want to use.
+> ✅ **Bot working and fixed**  
+> Compatible with the new version of the website.
 
 # WPlace AutoBOT
 
