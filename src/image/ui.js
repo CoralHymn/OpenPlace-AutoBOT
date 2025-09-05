@@ -37,7 +37,7 @@ export async function createImageUI({ texts, ...handlers }) {
     .container {
       position: fixed;
       top: 20px;
-      right: 20px;
+      right: 70px;
       width: 300px;
       min-width: 250px;
       background: #1a1a1a;

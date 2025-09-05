@@ -8,7 +8,7 @@ export function createGuardUI(texts) {
   container.style.cssText = `
     position: fixed;
     top: 20px;
-    right: 20px;
+    right: 70px;
     width: 350px;
     min-width: 280px;
     max-width: 500px;
