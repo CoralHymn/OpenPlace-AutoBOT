@@ -1,7 +1,6 @@
 import { log } from "../core/logger.js";
 import { createShadowRoot } from "../core/ui-utils.js";
 import { createLogWindow } from "../log_window/index.js";
-import { createPaintingStatsWindow } from "./painting-stats.js";
 import { createResizeWindow } from "./Resize-window.js";
 import { saveGuardJSON } from "./safe-guard-window.js";
 import { registerWindow, unregisterWindow, bringWindowToFront } from '../core/window-manager.js';
@@ -55,6 +54,11 @@ export async function createImageUI({ texts, ...handlers }) {
       min-height: 200px;
       max-height: 80vh;
     }
+    /* Estado minimizado: el contenedor no fuerza altura mínima */
+    .container.minimized {
+      min-height: 0 !important;
+      height: auto !important;
+    }
     
     .header {
       padding: 12px 15px;
@@ -102,6 +106,30 @@ export async function createImageUI({ texts, ...handlers }) {
       overflow-x: hidden;
       display: block;
       position: relative;
+    }
+    
+    /* Elementos que se ocultan cuando está minimizado */
+    .collapsible-content {
+      max-height: 1000px;
+      transition: max-height 0.35s ease, opacity 0.25s ease, padding 0.25s ease;
+    }
+    
+    .content.collapsed .collapsible-content {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      padding: 0;
+    }
+    /* El content deja de expandir al estar colapsado */
+    .content.collapsed {
+      flex: 0;
+    }
+    
+    /* Status siempre visible */
+    .content.collapsed .status {
+      display: block !important;
+      margin-top: 8px;
+      animation: slideIn 0.3s ease-out;
     }
     
     .controls {
@@ -379,7 +407,6 @@ export async function createImageUI({ texts, ...handlers }) {
       background: rgba(0, 150, 255, 0.1);
       color: #60a5fa;
     }
-    
 
     
     .modal-overlay {
@@ -563,7 +590,8 @@ export async function createImageUI({ texts, ...handlers }) {
       </div>
     </div>
     <div class="content">
-      <div class="config-panel">
+      <div class="collapsible-content">
+        <div class="config-panel">
         <div class="config-item">
           <label>${texts.batchSize}:</label>
           <input class="config-input pixels-per-batch" type="number" min="1" max="9999" value="20">
@@ -586,12 +614,25 @@ export async function createImageUI({ texts, ...handlers }) {
         <div class="config-item">
           <label>📐 Patrón de pintado:</label>
           <select class="config-input paint-pattern">
-            <option value="linear_start">Lineal (Inicio)</option>
-            <option value="linear_end">Lineal (Final)</option>
-            <option value="random">Aleatorio</option>
-            <option value="center_out">Centro hacia afuera</option>
-            <option value="corners_first">Esquinas primero</option>
-            <option value="spiral">Espiral</option>
+            <option value="linear_start">➡️ Lineal (Inicio)</option>
+            <option value="linear_end">⬅️ Lineal (Final)</option>
+            <option value="random">🎲 Aleatorio</option>
+            <option value="center_out">💥 Centro hacia afuera</option>
+            <option value="corners_first">🏁 Esquinas primero</option>
+            <option value="spiral">🌀 Espiral</option>
+            <option value="snake">🐍 Serpiente (Zigzag)</option>
+            <option value="diagonal_sweep">📐 Barrido diagonal</option>
+            <option value="borders">🖼️ Bordes primero</option>
+            <option value="center">🎯 Centro primero</option>
+            <option value="quadrants">🔲 Cuadrantes</option>
+            <option value="biased_random">🎯 Aleatorio sesgado (bordes)</option>
+            <option value="clusters">🎪 Clusters</option>
+            <option value="proximity">🤝 Proximidad</option>
+            <option value="sweep">🧹 Barrido por secciones</option>
+            <option value="priority">⭐ Prioridad (mixto)</option>
+            <option value="anchor_points">⚓ Puntos de anclaje</option>
+            <option value="spiral_cw">🔄 Espiral (horaria)</option>
+            <option value="spiral_ccw">🔃 Espiral (antihoraria)</option>
           </select>
         </div>
       </div>
@@ -611,8 +652,8 @@ export async function createImageUI({ texts, ...handlers }) {
       </div>
       
       <div class="controls">
-        <!-- Flujo 1: Estado inicial - Subir Imagen/Cargar Progreso + Logs -->
-        <div class="button-row" data-state="initial">
+        <!-- Botones siempre visibles: Cargar imagen y Cargar progreso -->
+        <div class="button-row">
           <button class="btn btn-upload upload-btn btn-half">
             📤
             <span>${texts.uploadImage}</span>
@@ -622,55 +663,9 @@ export async function createImageUI({ texts, ...handlers }) {
             <span>${texts.loadProgress}</span>
           </button>
         </div>
-        <button class="btn btn-secondary log-window-btn btn-full" data-state="initial">
-          📋
-          <span>${texts.logWindow || 'Logs'}</span>
-        </button>
-        <button class="btn btn-secondary guard-json-btn btn-full" data-state="initial">
-          🛡️
-          <span>Guard JSON</span>
-        </button>
         
-        <!-- Flujo 2: Carga de progreso - Cargar Progreso + Iniciar/Detener + Guardar/Logs -->
-        <div class="button-row" data-state="load-progress" style="display: none;">
-          <button class="btn btn-load load-progress-btn-flow btn-half">
-            📁
-            <span>${texts.loadProgress}</span>
-          </button>
-          <button class="btn btn-secondary stats-btn btn-half">
-            📊
-            <span>Estadísticas</span>
-          </button>
-        </div>
-        <div class="button-row" data-state="load-progress" style="display: none;">
-          <button class="btn btn-start start-btn btn-half">
-            ▶️
-            <span>${texts.startPainting}</span>
-          </button>
-          <button class="btn btn-stop stop-btn btn-half">
-            ⏹️
-            <span>${texts.stopPainting}</span>
-          </button>
-        </div>
-        <div class="button-row" data-state="load-progress" style="display: none;">
-          <button class="btn btn-secondary save-progress-btn btn-half">
-            💾
-            <span>Guardar progreso</span>
-          </button>
-          <button class="btn btn-secondary log-window-btn btn-half">
-            📋
-            <span>${texts.logWindow || 'Logs'}</span>
-          </button>
-        </div>
-        <div class="button-row" data-state="load-progress" style="display: none;">
-          <button class="btn btn-secondary guard-json-btn btn-full">
-            🛡️
-            <span>Guard JSON</span>
-          </button>
-        </div>
-        
-        <!-- Flujo 3: Subida de imagen - Redimensionar/Seleccionar + Iniciar/Detener + Guardar/Logs -->
-        <div class="button-row" data-state="upload-image" style="display: none;">
+        <!-- Botones para imagen: Redimensionar y Seleccionar posición -->
+        <div class="button-row image-controls" style="display: none;">
           <button class="btn btn-primary resize-btn btn-half">
             🔄
             <span>${texts.resizeImage}</span>
@@ -680,17 +675,21 @@ export async function createImageUI({ texts, ...handlers }) {
             <span>${texts.selectPosition}</span>
           </button>
         </div>
-        <div class="button-row" data-state="upload-image" style="display: none;">
-          <button class="btn btn-start start-btn-upload btn-half">
+        
+        <!-- Botones de control: Iniciar y Detener -->
+        <div class="button-row painting-controls" style="display: none;">
+          <button class="btn btn-start start-btn btn-half">
             ▶️
             <span>${texts.startPainting}</span>
           </button>
-          <button class="btn btn-stop stop-btn-upload btn-half">
+          <button class="btn btn-stop stop-btn btn-half">
             ⏹️
             <span>${texts.stopPainting}</span>
           </button>
         </div>
-        <div class="button-row" data-state="upload-image" style="display: none;">
+        
+        <!-- Botones de utilidades -->
+        <div class="button-row utility-controls" style="display: none;">
           <button class="btn btn-secondary save-progress-btn btn-half">
             💾
             <span>Guardar progreso</span>
@@ -700,12 +699,12 @@ export async function createImageUI({ texts, ...handlers }) {
             <span>${texts.logWindow || 'Logs'}</span>
           </button>
         </div>
-        <div class="button-row" data-state="upload-image" style="display: none;">
-          <button class="btn btn-secondary guard-json-btn btn-full">
-            🛡️
-            <span>Guard JSON</span>
-          </button>
-        </div>
+        
+        <!-- Guard JSON siempre disponible cuando hay datos -->
+        <button class="btn btn-secondary guard-json-btn btn-full guard-controls" style="display: none;">
+          🛡️
+          <span>Guard JSON</span>
+        </button>
         
         <!-- Botón de inicialización oculto por defecto -->
         <button class="btn btn-primary init-btn btn-full" style="display: none;">
@@ -725,6 +724,7 @@ export async function createImageUI({ texts, ...handlers }) {
           </div>
         </div>
       </div>
+      </div> <!-- Fin collapsible-content -->
       
       <div class="status status-default">
         ${texts.waitingInit}
@@ -757,7 +757,6 @@ export async function createImageUI({ texts, ...handlers }) {
     configPanel: container.querySelector('.config-panel'),
     pixelsPerBatch: container.querySelector('.pixels-per-batch'),
     useAllCharges: container.querySelector('.use-all-charges'),
-
     paintPattern: container.querySelector('.paint-pattern'),
     showOverlay: container.querySelector('.show-overlay'),
     batchValue: container.querySelector('.batch-value'),
@@ -765,22 +764,22 @@ export async function createImageUI({ texts, ...handlers }) {
     initBtn: container.querySelector('.init-btn'),
     uploadBtn: container.querySelector('.upload-btn'),
     loadProgressBtn: container.querySelector('.load-progress-btn'),
-    loadProgressBtnFlow: container.querySelector('.load-progress-btn-flow'),
-    saveProgressBtn: container.querySelectorAll('.save-progress-btn'),
-    guardJsonBtn: container.querySelectorAll('.guard-json-btn'),
-
+    saveProgressBtn: container.querySelector('.save-progress-btn'),
+    guardJsonBtn: container.querySelector('.guard-json-btn'),
     resizeBtn: container.querySelector('.resize-btn'),
     selectPosBtn: container.querySelector('.select-pos-btn'),
     startBtn: container.querySelector('.start-btn'),
-    startBtnUpload: container.querySelector('.start-btn-upload'),
     stopBtn: container.querySelector('.stop-btn'),
-    stopBtnUpload: container.querySelector('.stop-btn-upload'),
-    statsBtn: container.querySelector('.stats-btn'),
-    logWindowBtn: container.querySelectorAll('.log-window-btn'),
+    logWindowBtn: container.querySelector('.log-window-btn'),
     progressBar: container.querySelector('.progress-bar'),
     statsArea: container.querySelector('.stats-area'),
     status: container.querySelector('.status'),
-    content: container.querySelector('.content')
+    content: container.querySelector('.content'),
+    // Contenedores de controles
+    imageControls: container.querySelector('.image-controls'),
+    paintingControls: container.querySelector('.painting-controls'),
+    utilityControls: container.querySelector('.utility-controls'),
+    guardControls: container.querySelector('.guard-controls')
   };
   
   // Estado actual de la interfaz (manejado por la función setState)
@@ -904,18 +903,16 @@ export async function createImageUI({ texts, ...handlers }) {
   elements.minimizeBtn.addEventListener('click', () => {
     const content = container.querySelector('.content');
     
-    if (content.style.display === 'none') {
+    if (content.classList.contains('collapsed')) {
       // Restaurar ventana
-      content.style.display = 'block';
+      content.classList.remove('collapsed');
+      container.classList.remove('minimized');
       elements.minimizeBtn.innerHTML = '➖';
-      container.style.height = 'auto';
-      container.style.minHeight = 'auto';
     } else {
-      // Minimizar ventana
-      content.style.display = 'none';
+      // Minimizar ventana con animación suave
+      content.classList.add('collapsed');
+      container.classList.add('minimized');
       elements.minimizeBtn.innerHTML = '🔼';
-      container.style.height = 'auto';
-      container.style.minHeight = 'auto';
     }
   });
   
@@ -955,25 +952,48 @@ export async function createImageUI({ texts, ...handlers }) {
     }
   });
   
-  // Función para cambiar el estado de la interfaz
-  function setState(newState) {
-    // Ocultar todos los elementos con data-state
-    const allElements = container.querySelectorAll('[data-state]');
-    allElements.forEach(element => {
-      element.style.display = 'none';
-    });
-    
-    // Mostrar elementos del estado actual
-    const stateElements = container.querySelectorAll(`[data-state*="${newState}"]`);
-    stateElements.forEach(element => {
-      if (element.classList.contains('button-row')) {
-        element.style.display = 'flex';
-      } else {
-        element.style.display = 'flex';
-      }
-    });
-    
-    log(`🔄 Estado cambiado a: ${newState}`);
+  // Funciones para mostrar/ocultar grupos de controles
+  function showImageControls(show = true) {
+    elements.imageControls.style.display = show ? 'flex' : 'none';
+  }
+  
+  function showPaintingControls(show = true) {
+    elements.paintingControls.style.display = show ? 'flex' : 'none';
+  }
+  
+  function showUtilityControls(show = true) {
+    elements.utilityControls.style.display = show ? 'flex' : 'none';
+  }
+  
+  function showGuardControls(show = true) {
+    elements.guardControls.style.display = show ? 'flex' : 'none';
+  }
+  
+  // Función para mostrar controles cuando se carga una imagen
+  function showControlsForImage() {
+    showImageControls(true);
+    showPaintingControls(true);
+    showUtilityControls(true);
+    showGuardControls(true);
+    log('🔄 Controles de imagen mostrados');
+  }
+  
+  // Función para mostrar controles cuando se carga progreso
+  function showControlsForProgress() {
+    showImageControls(false); // No necesita redimensionar/seleccionar
+    showPaintingControls(true);
+    showUtilityControls(true);
+    showGuardControls(true);
+    log('🔄 Controles de progreso mostrados');
+  }
+  
+  // Función para ocultar controles (estado inicial)
+  function hideAllControls() {
+    showImageControls(false);
+    showPaintingControls(false);
+    showUtilityControls(false);
+    showGuardControls(false);
+    log('🔄 Todos los controles ocultos');
   }
   
   // Función para habilitar botones después de inicialización exitosa
@@ -1000,7 +1020,7 @@ export async function createImageUI({ texts, ...handlers }) {
     if (fileInput.files.length > 0 && handlers.onUploadImage) {
       const success = await handlers.onUploadImage(fileInput.files[0]);
       if (success) {
-        setState('upload-image');
+        showControlsForImage();
         // Abrir automáticamente el diálogo de redimensionar
         if (handlers.onResizeImage) {
           setTimeout(() => {
@@ -1019,45 +1039,36 @@ export async function createImageUI({ texts, ...handlers }) {
     if (progressFileInput.files.length > 0 && handlers.onLoadProgress) {
       const success = await handlers.onLoadProgress(progressFileInput.files[0]);
       if (success) {
-        setState('load-progress');
+        showControlsForProgress();
       }
     }
   });
   
-  // Event listener para el botón de cargar progreso en el flujo
-  elements.loadProgressBtnFlow.addEventListener('click', () => {
-    progressFileInput.click();
+  // Event listener para el botón de guardar progreso
+  elements.saveProgressBtn.addEventListener('click', () => {
+    if (handlers.onSaveProgress) {
+      handlers.onSaveProgress();
+    }
   });
   
-  // Event listeners para múltiples botones de guardar progreso
-  elements.saveProgressBtn.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (handlers.onSaveProgress) {
-        handlers.onSaveProgress();
+  // Event listener para Guard JSON
+  elements.guardJsonBtn.addEventListener('click', async () => {
+    try {
+      if (!handlers.generateGuardJSON) {
+        alert('No se puede generar el JSON del Guard en este momento.');
+        return;
       }
-    });
-  });
-  
-  // Event listeners para Guard JSON (disponible en todos los estados)
-  elements.guardJsonBtn.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        if (!handlers.generateGuardJSON) {
-          alert('No se puede generar el JSON del Guard en este momento.');
-          return;
-        }
-        log('🛡️ Generando Guard JSON...');
-        const data = await handlers.generateGuardJSON();
-        if (!data) {
-          alert('No hay datos disponibles para guardar.');
-          return;
-        }
-        await saveGuardJSON(data);
-      } catch (err) {
-        console.error(err);
-        alert('Error al generar o guardar el Guard JSON');
+      log('🛡️ Generando Guard JSON...');
+      const data = await handlers.generateGuardJSON();
+      if (!data) {
+        alert('No hay datos disponibles para guardar.');
+        return;
       }
-    });
+      await saveGuardJSON(data);
+    } catch (err) {
+      console.error(err);
+      alert('Error al generar o guardar el Guard JSON');
+    }
   });
   
   elements.resizeBtn.addEventListener('click', () => {
@@ -1068,20 +1079,16 @@ export async function createImageUI({ texts, ...handlers }) {
   
 
   
-  // Event listeners para botones de selección de posición (ambos flujos)
-  const handleSelectPosition = async (btn, startBtn) => {
+  // Event listeners para botones de selección de posición
+  elements.selectPosBtn.addEventListener('click', async () => {
     if (handlers.onSelectPosition) {
-      btn.disabled = true;
+      elements.selectPosBtn.disabled = true;
       const success = await handlers.onSelectPosition();
-      if (success && startBtn) {
-        startBtn.disabled = false;
+      if (success) {
+        elements.startBtn.disabled = false;
       }
-      btn.disabled = false;
+      elements.selectPosBtn.disabled = false;
     }
-  };
-  
-  elements.selectPosBtn.addEventListener('click', () => {
-    handleSelectPosition(elements.selectPosBtn, elements.startBtnUpload);
   });
 
   // Checkbox mostrar overlay
@@ -1092,8 +1099,8 @@ export async function createImageUI({ texts, ...handlers }) {
     window.__WPA_PLAN_OVERLAY__.setEnabled(isEnabled);
   });
   
-  // Event listeners para botones de start/stop (ambos flujos)
-  const handleStartPainting = async (startBtn, stopBtn) => {
+  // Event listeners para botones de start/stop
+  elements.startBtn.addEventListener('click', async () => {
     if (handlers.onStartPainting) {
       // Establecer estado de pintura activa
       setPaintingState(true);
@@ -1103,9 +1110,9 @@ export async function createImageUI({ texts, ...handlers }) {
         setPaintingState(false);
       }
     }
-  };
+  });
   
-  const handleStopPainting = async (startBtn, stopBtn) => {
+  elements.stopBtn.addEventListener('click', async () => {
     if (handlers.onStopPainting) {
       const shouldStop = await handlers.onStopPainting();
       if (shouldStop) {
@@ -1113,58 +1120,18 @@ export async function createImageUI({ texts, ...handlers }) {
         setPaintingState(false);
       }
     }
-  };
-  
-  // Flujo de carga de progreso
-  elements.startBtn.addEventListener('click', () => {
-    handleStartPainting(elements.startBtn, elements.stopBtn);
-  });
-  
-  elements.stopBtn.addEventListener('click', () => {
-    handleStopPainting(elements.startBtn, elements.stopBtn);
-  });
-  
-  // Flujo de subida de imagen
-  elements.startBtnUpload.addEventListener('click', () => {
-    handleStartPainting(elements.startBtnUpload, elements.stopBtnUpload);
-  });
-  
-  elements.stopBtnUpload.addEventListener('click', () => {
-    handleStopPainting(elements.startBtnUpload, elements.stopBtnUpload);
   });
   
   // Variable para mantener referencia a la ventana de logs
   let logWindow = null;
   
-  // Variable para mantener referencia a la ventana de estadísticas
-  let statsWindow = null;
-  
-  // Event listeners para múltiples botones de logs
-  elements.logWindowBtn.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (!logWindow) {
-        logWindow = createLogWindow('image');
-        logWindow.show();
-      } else {
-        logWindow.toggle();
-      }
-    });
-  });
-  
-  elements.statsBtn.addEventListener('click', () => {
-    if (!statsWindow) {
-      statsWindow = createPaintingStatsWindow();
-      
-      // Configurar callback de actualización
-      statsWindow.setRefreshCallback(() => {
-        if (handlers.onRefreshStats) {
-          handlers.onRefreshStats();
-        }
-      });
-      
-      statsWindow.show();
+  // Event listener para botón de logs
+  elements.logWindowBtn.addEventListener('click', () => {
+    if (!logWindow) {
+      logWindow = createLogWindow('image');
+      logWindow.show();
     } else {
-      statsWindow.toggle();
+      logWindow.toggle();
     }
   });
   
@@ -1284,7 +1251,7 @@ export async function createImageUI({ texts, ...handlers }) {
   
   // Función para resetear al estado inicial
   function resetToInitialState() {
-    setState('initial');
+    hideAllControls();
     // Resetear estados de botones
     const allButtons = container.querySelectorAll('button');
     allButtons.forEach(btn => {
@@ -1296,46 +1263,24 @@ export async function createImageUI({ texts, ...handlers }) {
     if (logWindow) {
       logWindow.destroy();
     }
-    if (statsWindow) {
-      statsWindow.destroy();
-    }
     // Desregistrar ventana del window manager
     unregisterWindow(container);
     host.remove();
-  }
-  
-  // Función para actualizar las estadísticas desde el código principal
-  function updateStatsWindow(data) {
-    if (statsWindow && statsWindow.isVisible()) {
-      if (data.userInfo) {
-        statsWindow.updateUserStats(data.userInfo);
-      }
-      if (data.imageInfo) {
-        statsWindow.updateImageStats(data.imageInfo);
-      }
-      if (data.availableColors) {
-        statsWindow.updateColorsStats(data.availableColors);
-      }
-    }
   }
   
   // Función para gestionar el estado de los botones según el estado de la pintura
   function setPaintingState(isPainting) {
     // Deshabilitar/habilitar botones de inicio según el estado
     elements.startBtn.disabled = isPainting;
-    elements.startBtnUpload.disabled = isPainting;
     
     // Habilitar/deshabilitar botones de parada según el estado
     elements.stopBtn.disabled = !isPainting;
-    elements.stopBtnUpload.disabled = !isPainting;
 
     // Asegurar botón Detener en rojo visible cuando está pintando
     if (isPainting) {
       elements.stopBtn.classList.add('btn-stop-running');
-      elements.stopBtnUpload.classList.add('btn-stop-running');
     } else {
       elements.stopBtn.classList.remove('btn-stop-running');
-      elements.stopBtnUpload.classList.remove('btn-stop-running');
     }
     
     // Deshabilitar/habilitar botón de cargar progreso durante la pintura
@@ -1373,8 +1318,8 @@ export async function createImageUI({ texts, ...handlers }) {
   
   log('✅ Interfaz de Auto-Image creada');
   
-  // Inicializar en estado inicial
-  setState('initial');
+  // Inicializar en estado inicial (todo oculto)
+  hideAllControls();
   
   return {
     setStatus,
@@ -1384,7 +1329,8 @@ export async function createImageUI({ texts, ...handlers }) {
     setInitialized,
     setInitButtonVisible,
     enableButtonsAfterInit,
-    setState,
+    showControlsForImage,
+    showControlsForProgress,
     resetToInitialState,
     showResizeDialog: (processor) => {
       resizeWindow.showResizeDialog(processor, {
@@ -1396,7 +1342,6 @@ export async function createImageUI({ texts, ...handlers }) {
     closeResizeDialog: () => {
       resizeWindow.closeResizeDialog();
     },
-    updateStatsWindow,
     setPaintingState,
     updateUIFromState,
     destroy,

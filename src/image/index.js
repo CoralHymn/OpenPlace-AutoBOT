@@ -9,7 +9,7 @@ import { getSession } from "../core/wplace-api.js";
 import { initializeLanguage, getSection, t, getCurrentLanguage } from "../locales/index.js";
 import { isPaletteOpen, autoClickPaintButton } from "../core/dom.js";
 import "./plan-overlay-blue-marble.js";
-import { sessionStart, sessionPing, sessionEnd, pixelsPainted, reportError } from "../core/metrics/client.js";
+import { sessionStart, sessionPing, sessionEnd, reportError } from "../core/metrics/client.js";
 import { getMetricsConfig } from "../core/metrics/config.js";
 
 export async function runImage() {
@@ -121,6 +121,10 @@ export async function runImage() {
         return false;
       }
       
+      // Almacenar colores detectados en el estado global
+      imageState.availableColors = colors;
+      log(`✅ ${colors.length} colores almacenados en estado global`);
+      
       // Obtener información del usuario
       const sessionInfo = await getSession();
       let userInfo = null;
@@ -167,9 +171,7 @@ export async function runImage() {
     }
 
   // Crear interfaz de usuario
-  // Estado interno para métricas: enviar SIEMPRE delta y no el acumulado
-  let __lastPaintedReported = 0;
-    const ui = await createImageUI({
+  const ui = await createImageUI({
       texts,
       
       onConfigChange: (config) => {
@@ -229,12 +231,22 @@ export async function runImage() {
           // Inicializar paleta de colores Blue Marble
           const availableColors = processor.initializeColorPalette();
           imageState.availableColors = availableColors;
+          // Tolerancia LAB por defecto ahora 100 (intentar siempre el más próximo)
+          processor.setLabTolerance(100);
           
           // Analizar píxeles de la imagen
           const analysisResult = await processor.analyzePixels();
           
           // Establecer coordenadas base (se actualizarán al seleccionar posición)
           processor.setCoords(0, 0, 0, 0);
+          
+          // Nuevo: remapear inmediatamente a pixelart y descartar original visual (mantener copia para 'Mostrar original')
+          try {
+            await processor.remapImageToPalette();
+            log('✅ Imagen remapeada a paleta automáticamente tras subir');
+          } catch (e) {
+            log('⚠️ Error remapeando imagen tras subir (continuando con original):', e);
+          }
           
           // Obtener datos de imagen procesados
           const processedData = processor.getImageData();
@@ -540,12 +552,6 @@ export async function runImage() {
         // independientemente de si es nuevo o reanudación
         imageState.isFirstBatch = imageState.useAllChargesFirst; 
 
-        // Alinear métricas: no recontar progreso previo cargado
-        try {
-          __lastPaintedReported = Math.trunc(imageState.paintedPixels || 0);
-        } catch {}
-            // log(`[METRICS] init align lastReported=${__lastPaintedReported}`);
-        
         log(`🚀 Iniciando pintado - isFirstBatch: ${imageState.isFirstBatch}, useAllChargesFirst: ${imageState.useAllChargesFirst}`);
         
         ui.setStatus(t('image.startPaintingMsg'), 'success');
@@ -565,16 +571,6 @@ export async function runImage() {
               }
               
               ui.updateProgress(painted, total, currentUserInfo);
-              // IMPORTANTE: 'painted' aquí es acumulado; reportar sólo el delta desde la última notificación
-              try {
-                const delta = Math.max(0, Math.trunc(painted) - Math.trunc(__lastPaintedReported));
-                if (delta > 0) {
-                  pixelsPainted(delta, { botVariant: 'auto-image' });
-                  __lastPaintedReported = Math.trunc(painted);
-                }
-              } catch {}
-                    // pixelsPainted(delta, { botVariant: 'auto-image' });
-                    // __lastPaintedReported = Math.trunc(painted);
               
               // Actualizar display de cooldown si hay cooldown activo
               if (imageState.inCooldown && imageState.nextBatchCooldown > 0) {
@@ -603,8 +599,6 @@ export async function runImage() {
                 ui.setStatus(t('image.paintingStopped'), 'warning');
               }
               imageState.running = false;
-              // Reset del contador interno de métricas para siguientes sesiones
-              __lastPaintedReported = 0;
             },
             // onError
             (error) => {
@@ -715,8 +709,16 @@ export async function runImage() {
             processor.setSelectedColors(selectedColorObjects);
             log(`🎨 Paleta actualizada con ${selectedColors.length} colores seleccionados`);
           }
+          // Importante: remapear la imagen al estado actual de paleta/tolerancia para que el overlay
+          // se base en el resultado final del procesador (no en la imagen original)
+          try {
+            await processor.remapImageToPalette();
+            log('✅ Imagen remapeada tras redimensionado/selección antes de generar overlay');
+          } catch (e) {
+            log('⚠️ Error remapeando imagen tras redimensionado:', e);
+          }
           
-          // Reanalizar imagen con nuevo tamaño usando Blue Marble
+          // Reanalizar imagen con nuevo tamaño usando Blue Marble (ya remapeada)
           const analysisResult = await processor.analyzePixels();
           
           // Actualizar imageState con resultados de Blue Marble
@@ -787,68 +789,21 @@ export async function runImage() {
         }
       },
       
-      // Funciones para el manejo de estadísticas
-      onRefreshStats: async () => {
-        log('🔄 Actualizando estadísticas...');
-        
-        try {
-          // Obtener información actualizada del usuario
-          const sessionInfo = await getSession();
-          let userInfo = null;
-          
-          if (sessionInfo.success && sessionInfo.data.user) {
-            userInfo = {
-              username: sessionInfo.data.user.name || 'Anónimo',
-              charges: sessionInfo.data.charges,
-              maxCharges: sessionInfo.data.maxCharges,
-              pixels: sessionInfo.data.user.pixelsPainted || 0,
-              cooldown: sessionInfo.data.cooldown || 0
-            };
-            currentUserInfo = userInfo;
-            
-            // Actualizar estado global también
-            imageState.currentCharges = sessionInfo.data.charges;
-            imageState.maxCharges = sessionInfo.data.maxCharges || 9999;
-          }
-          
-          // Actualizar colores disponibles
-          const colors = detectAvailableColors();
-          if (colors.length > 0) {
-            imageState.availableColors = colors;
-            imageState.colorsChecked = true;
-          }
-          
-          // Preparar información de la imagen
-          let imageInfo = null;
-          if (imageState.imageLoaded) {
-            imageInfo = {
-              loaded: true,
-              totalPixels: imageState.totalPixels,
-              paintedPixels: imageState.paintedPixels,
-              estimatedTime: imageState.estimatedTime,
-              originalName: imageState.originalImageName
-            };
-          }
-          
-          // Actualizar ventana de estadísticas
-          ui.updateStatsWindow({
-            userInfo,
-            imageInfo,
-            availableColors: colors.length > 0 ? colors : imageState.availableColors
-          });
-          
-          // También actualizar la UI principal
-          ui.updateProgress(imageState.paintedPixels, imageState.totalPixels, userInfo);
-          
-          log(`✅ Estadísticas actualizadas: ${colors.length > 0 ? colors.length : (imageState.availableColors?.length || 0)} colores disponibles`);
-        } catch (error) {
-          log('❌ Error actualizando estadísticas:', error);
-        }
-      },
-      
-      // Función para obtener colores disponibles (usada por el selector de paleta)
+      // Función para obtener colores disponibles
       getAvailableColors: () => {
-        return imageState.availableColors || [];
+        if (imageState.availableColors && imageState.availableColors.length > 0) {
+          return imageState.availableColors;
+        }
+        
+        // Fallback: intentar detectar colores en tiempo real
+        try {
+          const colors = detectAvailableColors();
+          imageState.availableColors = colors;
+          return colors;
+        } catch (error) {
+          log('⚠️ Error obteniendo colores disponibles:', error);
+          return [];
+        }
       },
       
       // Función para manejar cambios en la selección de colores

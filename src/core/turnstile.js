@@ -6,8 +6,14 @@ import { log } from "./logger.js";
 
 // Optimized Turnstile token handling with caching and retry logic
 let turnstileToken = null;
+// New protection tokens from site (captured):
+let _pawtectToken = null; // header: x-pawtect-token
+let _fp = null;           // body: fp
+let _pawtectResolve = null;
+let _pawtectPromise = new Promise((res) => { _pawtectResolve = res; });
 let tokenExpiryTime = 0;
 let tokenGenerationInProgress = false;
+let currentGenerationPromise = null; // comparte la promesa entre llamadas concurrentes
 let _resolveToken = null;
 let tokenPromise = new Promise((resolve) => { _resolveToken = resolve });
 const TOKEN_LIFETIME = 240000; // 4 minutes (tokens typically last 5 min, use 4 for safety)
@@ -52,40 +58,48 @@ export async function ensureToken(forceNew = false) {
     invalidateToken();
   }
 
-  // Avoid multiple simultaneous token generations
-  if (tokenGenerationInProgress) {
-    log("🔄 Token generation already in progress, waiting...");
-    await sleep(2000);
-    return isTokenValid() ? turnstileToken : null;
+  // Avoid multiple simultaneous token generations: esperar la promesa en curso
+  if (tokenGenerationInProgress && currentGenerationPromise) {
+    log("🔄 Token generation already in progress, waiting for existing promise...");
+    try {
+      const t = await currentGenerationPromise;
+      return t && t.length > 20 ? t : (isTokenValid() ? turnstileToken : null);
+    } catch {
+      // Si falla, continuar con un nuevo intento abajo
+    }
   }
 
   tokenGenerationInProgress = true;
-  
-  try {
-    log("🔄 Token expired or missing, generating new one...");
-    
-    // First try invisible Turnstile
-    const token = await handleCaptcha();
-    if (token && token.length > 20) {
-      setTurnstileToken(token);
-      log("✅ Token captured and cached successfully");
-      return token;
+  currentGenerationPromise = (async () => {
+    try {
+      log("🔄 Token expired or missing, generating new one...");
+
+      // First try invisible Turnstile
+      const token = await handleCaptcha();
+      if (token && token.length > 20) {
+        setTurnstileToken(token);
+        log("✅ Token captured and cached successfully");
+        return token;
+      }
+
+      // If invisible fails, force browser automation
+      log("⚠️ Invisible Turnstile failed, forcing browser automation...");
+      const fallbackToken = await handleCaptchaFallback();
+      if (fallbackToken && fallbackToken.length > 20) {
+        setTurnstileToken(fallbackToken);
+        log("✅ Fallback token captured successfully");
+        return fallbackToken;
+      }
+
+      log("❌ All token generation methods failed");
+      return null;
+    } finally {
+      tokenGenerationInProgress = false;
+      currentGenerationPromise = null;
     }
-    
-    // If invisible fails, force browser automation
-    log("⚠️ Invisible Turnstile failed, forcing browser automation...");
-    const fallbackToken = await handleCaptchaFallback();
-    if (fallbackToken && fallbackToken.length > 20) {
-      setTurnstileToken(fallbackToken);
-      log("✅ Fallback token captured successfully");
-      return fallbackToken;
-    }
-    
-    log("❌ All token generation methods failed");
-    return null;
-  } finally {
-    tokenGenerationInProgress = false;
-  }
+  })();
+
+  return currentGenerationPromise;
 }
 
 // Main captcha handler - replicated from example
@@ -244,10 +258,10 @@ async function executeTurnstile(sitekey, action = 'paint') {
   log('👀 Falling back to interactive Turnstile (visible).');
   // Aviso inicial al usuario del primer intento interactivo
   try { showUserNotificationTopCenter('🔄 Resolviendo CAPTCHA...', 'info'); } catch {}
-  
-  // Sistema de reintentos indefinidos con timeout inicial de 30s
-  const INITIAL_TIMEOUT = 30000; // 30 segundos para el primer intento
-  const RETRY_INTERVAL = 30000;  // 30 segundos entre reintentos
+
+  // Sistema de reintentos indefinidos con timeout inicial de 15s
+  const INITIAL_TIMEOUT = 15000; // 15 segundos para el primer intento
+  const RETRY_INTERVAL = 5000;   // 5 segundos entre reintentos
   
   let attempt = 1;
   let hasShownFirstRetryNotification = false;
@@ -258,7 +272,7 @@ async function executeTurnstile(sitekey, action = 'paint') {
     
     // Mostrar notificación al usuario a partir del primer reintento
     if (attempt > 1 && !hasShownFirstRetryNotification) {
-      showUserNotification(`🔄 CAPTCHA: Reintentando automáticamente cada 30 segundos (intento ${attempt})`, 'info');
+      showUserNotification(`🔄 CAPTCHA: Reintentando automáticamente cada 5 segundos (intento ${attempt})`, 'info');
       hasShownFirstRetryNotification = true;
     } else if (attempt > 2) {
       showUserNotification(`🔄 CAPTCHA: Intento ${attempt} - Continuando automáticamente`, 'info');
@@ -284,18 +298,18 @@ async function executeTurnstile(sitekey, action = 'paint') {
         return token;
       }
       
-      log(`⚠️ Intento ${attempt} falló, reintentando en 30 segundos...`);
+      log(`⚠️ Intento ${attempt} falló, reintentando en 5 segundos...`);
       if (attempt > 1) {
-        showUserNotification(`⚠️ Intento ${attempt} falló, reintentando en 30 segundos...`, 'info');
+        showUserNotification(`⚠️ Intento ${attempt} falló, reintentando en 5 segundos...`, 'info');
       }
-      await sleep(30000); // Esperar 30 segundos antes del siguiente intento
+      await sleep(5000); // Esperar 5 segundos antes del siguiente intento
       
     } catch (error) {
       log(`❌ Error en intento ${attempt}:`, error.message);
       if (attempt > 1) {
-        showUserNotification(`❌ Error en intento ${attempt}, reintentando en 30 segundos`, 'error');
+        showUserNotification(`❌ Error en intento ${attempt}, reintentando en 5 segundos`, 'error');
       }
-      await sleep(30000);
+      await sleep(5000);
     }
     
     attempt++;
@@ -710,14 +724,48 @@ window.__WPA_SET_TURNSTILE_TOKEN__ = function(token) {
     if (typeof url === "string") {
       if (url.includes("https://backend.wplace.live/s0/pixel/")) {
         try {
-          const payload = JSON.parse(args[1].body);
-          if (payload.t) {
-            // Only capture token if we don't have a valid one or if it's different
-            const capturedToken = payload.t;
-            if (!isTokenValid() || turnstileToken !== capturedToken) {
-              log("✅ Turnstile Token Captured:", capturedToken);
-              window.postMessage({ source: 'turnstile-capture', token: capturedToken }, '*');
-            }
+          const init = args[1] || {};
+          // Capture token and fingerprint from body
+          if (init.body && typeof init.body === 'string') {
+            try {
+              const payload = JSON.parse(init.body);
+              const capturedToken = payload.t || payload.token || null;
+              const capturedFp = payload.fp || null;
+              if (capturedToken) {
+                if (!isTokenValid() || turnstileToken !== capturedToken) {
+                  log("✅ Turnstile Token Captured:", capturedToken);
+                  window.postMessage({ source: 'turnstile-capture', token: capturedToken }, '*');
+                }
+              }
+              if (capturedFp && (!_fp || _fp !== capturedFp)) {
+                _fp = capturedFp;
+                log("🆔 Fingerprint (fp) captured");
+                if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
+              }
+            } catch { /* ignore */ }
+          }
+          // Capture custom header x-pawtect-token
+          const headers = init.headers;
+          let capturedPawtect = null;
+      if (headers) {
+            try {
+              const isHeadersLike = (obj) => !!obj && typeof obj.get === 'function' && typeof obj.append === 'function';
+              if (isHeadersLike(headers)) {
+                capturedPawtect = headers.get('x-pawtect-token');
+              } else if (Array.isArray(headers)) {
+                const found = headers.find(([k]) => String(k).toLowerCase() === 'x-pawtect-token');
+                capturedPawtect = found ? found[1] : null;
+              } else if (typeof headers === 'object') {
+                for (const k of Object.keys(headers)) {
+                  if (k.toLowerCase() === 'x-pawtect-token') { capturedPawtect = headers[k]; break; }
+                }
+              }
+            } catch { /* ignore */ }
+          }
+          if (capturedPawtect && (!_pawtectToken || _pawtectToken !== capturedPawtect)) {
+            _pawtectToken = capturedPawtect;
+            log('🛡️ x-pawtect-token captured');
+            if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
           }
         } catch { /* ignore */ }
       }
@@ -746,4 +794,17 @@ export { handleCaptcha, loadTurnstile, executeTurnstile, detectSitekey, invalida
 export async function getTurnstileToken(_siteKey) {
   log("⚠️ Using legacy getTurnstileToken function, consider migrating to ensureToken()");
   return await ensureToken();
+}
+
+// New exports for pawtect/fingerprint
+export function getPawtectToken() { return _pawtectToken; }
+export function getFingerprint() { return _fp; }
+export async function waitForPawtect(timeout = 5000) {
+  if (_pawtectToken && _fp) return { pawtect: _pawtectToken, fp: _fp };
+  const timer = setTimeout(() => { if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; } }, timeout);
+  const result = await _pawtectPromise.catch(() => ({ pawtect: _pawtectToken, fp: _fp }));
+  clearTimeout(timer);
+  // Prepare a new promise for future waits
+  if (!_pawtectResolve) { _pawtectPromise = new Promise((res) => { _pawtectResolve = res; }); }
+  return result;
 }
