@@ -7,22 +7,17 @@ import { initializeLanguage, t } from "../locales/index.js";
 import { loadFarmCfg } from "../core/storage.js";
 import { sessionStart, sessionPing, sessionEnd } from "../core/metrics/client.js";
 import { getMetricsConfig } from "../core/metrics/config.js";
-import { prepareTokensForBot } from "../core/warmup.js";
 
 export async function runFarm() {
   log('🚀 Iniciando WPlace Auto-Farm (versión con selección de zona)');
   
   // Inicializar sistema de idiomas
   initializeLanguage();
-  // Preparar tokens con la nueva ventana de captura
-  try {
-    const result = await prepareTokensForBot('Auto-Farm');
-    if (!result.success) {
-      log('⚠️ [farm] Tokens no preparados, continuando con interceptor activo');
-    }
-  } catch (error) {
-    log('❌ [farm] Error preparando tokens:', error);
-  }
+  // Farm bot usa su propio botón de captura en la UI, no necesita ventana modal automática
+  // Inicializar interceptor de tokens para capturas futuras
+  const { initializeTokenInterceptor } = await import('../core/token-interceptor.js');
+  initializeTokenInterceptor({ enabled: true });
+  log('🔧 Token interceptor inicializado para farm bot');
   
   // Asegurarse que el estado global existe
   window.__wplaceBot = { ...window.__wplaceBot, farmRunning: true };
