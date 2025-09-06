@@ -83,7 +83,7 @@ export async function purchaseProduct(productId = 70, amount = 1) {
     const body = JSON.stringify({ product: { id: productId, amount } });
     const r = await fetchWithTimeout(`${BASE}/purchase`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
       body,
       credentials: 'include',
       timeout: 15000

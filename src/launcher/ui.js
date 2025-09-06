@@ -31,7 +31,7 @@ export function createLauncherUI({
     .panel {
       position: fixed;
       top: 20px;
-      right: 20px;
+      right: 70px;
       width: 300px;
       background: ${LAUNCHER_CONFIG.THEME.primary};
       border: 1px solid ${LAUNCHER_CONFIG.THEME.accent};

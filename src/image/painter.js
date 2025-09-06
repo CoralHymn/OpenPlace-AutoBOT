@@ -350,7 +350,7 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
         
         // Reportar métricas del lote actual
         try {
-          pixelsPainted(result.painted + skippedCount);
+          pixelsPainted(result.painted + skippedCount, { botVariant: 'auto-image' });
         } catch (e) {
           log('⚠️ Error reportando métricas:', e);
         }

@@ -1,4 +1,5 @@
 import { log } from "./logger.js";
+import { initializeTokenInterceptor, setInterceptorEnabled } from "./token-interceptor.js";
 
 // ========================================
 // TURNSTILE TOKEN MANAGEMENT
@@ -713,94 +714,12 @@ window.__WPA_SET_TURNSTILE_TOKEN__ = function(token) {
   }
 };
 
-// Hook into fetch to capture turnstile tokens from POST requests (replicated from example)
-(function() {
-  if (window.__WPA_FETCH_HOOKED__) return; // Avoid hooking twice
-  window.__WPA_FETCH_HOOKED__ = true;
+// Note: Fetch interception is now handled by token-interceptor.js
+// This section is kept for legacy compatibility but the enhanced interceptor takes precedence
 
-  const originalFetch = window.fetch;
-  window.fetch = async function (...args) {
-    const response = await originalFetch.apply(this, args);
-    const url = (args[0] instanceof Request) ? args[0].url : args[0];
-
-    // Helper to detect WPlace pixel endpoint: supports absolute and relative URLs and any season number
-    const isPixelEndpoint = (u) => {
-      if (typeof u !== 'string') return false;
-      try {
-        // Normalize to pathname for robust matching (use window.URL for ESLint/browser compat)
-        const URLCtor = (typeof window !== 'undefined' && window.URL) ? window.URL : null;
-        if (URLCtor) {
-          const loc = (u.startsWith('http://') || u.startsWith('https://')) ? new URLCtor(u) : new URLCtor(u, window.location.origin);
-          return /\/s\d+\/pixel\//.test(loc.pathname);
-        }
-        // Fallback to direct regex if URL ctor not available
-        return /\/s\d+\/pixel\//.test(u);
-      } catch {
-        return /\/s\d+\/pixel\//.test(u);
-      }
-    };
-
-    if (typeof url === "string") {
-      if (isPixelEndpoint(url)) {
-        try {
-          const init = args[1] || {};
-          // Capture token and fingerprint from body
-          if (init.body && typeof init.body === 'string') {
-            try {
-              const payload = JSON.parse(init.body);
-              const capturedToken = payload.t || payload.token || null;
-              const capturedFp = payload.fp || null;
-              if (capturedToken) {
-                if (!isTokenValid() || turnstileToken !== capturedToken) {
-                  log("✅ Turnstile Token Captured:", capturedToken);
-                  window.postMessage({ source: 'turnstile-capture', token: capturedToken }, '*');
-                }
-              }
-              if (capturedFp && (!_fp || _fp !== capturedFp)) {
-                _fp = capturedFp;
-                window.__WPA_FINGERPRINT__ = _fp; // Compartir globalmente
-                log("🆔 Fingerprint (fp) captured");
-                if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
-              }
-            } catch { /* ignore */ }
-          }
-          // Capture custom header x-pawtect-token
-          let headers = init.headers;
-          // If a Request object is used, also try its headers
-          const req = (args[0] instanceof Request) ? args[0] : null;
-          if (!headers && req && req.headers) headers = req.headers;
-          let capturedPawtect = null;
-          if (headers) {
-            try {
-              const isHeadersLike = (obj) => !!obj && typeof obj.get === 'function' && typeof obj.append === 'function';
-              if (isHeadersLike(headers)) {
-                capturedPawtect = headers.get('x-pawtect-token');
-              } else if (Array.isArray(headers)) {
-                const found = headers.find(([k]) => String(k).toLowerCase() === 'x-pawtect-token');
-                capturedPawtect = found ? found[1] : null;
-              } else if (typeof headers === 'object') {
-                for (const k of Object.keys(headers)) {
-                  if (k.toLowerCase() === 'x-pawtect-token') { capturedPawtect = headers[k]; break; }
-                }
-              }
-            } catch { /* ignore */ }
-          }
-          if (capturedPawtect && (!_pawtectToken || _pawtectToken !== capturedPawtect)) {
-            _pawtectToken = capturedPawtect;
-            window.__WPA_PAWTECT_TOKEN__ = _pawtectToken; // Compartir globalmente
-            log('🛡️ x-pawtect-token captured');
-            if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
-          }
-        } catch { /* ignore */ }
-      }
-    }
-
-    return response;
-  };
-
-  // Listen for token capture messages
-  window.addEventListener('message', (event) => {
-    const data = event?.data;
+// Listen for token capture messages (moved outside IIFE)
+window.addEventListener('message', (event) => {
+  const data = event?.data;
     if (!data) return;
 
     // 1) Token capture via synthetic message from our fetch hook
@@ -811,7 +730,28 @@ window.__WPA_SET_TURNSTILE_TOKEN__ = function(token) {
       return;
     }
 
-    // 2) Direct fp published by site (if any)
+    // 2) Enhanced token interceptor messages
+    if (data.__wplace === true && data.type === 'token_found') {
+      if (data.token && (!isTokenValid() || turnstileToken !== data.token)) {
+        log('✅ Enhanced interceptor captured token:', data.token);
+        setTurnstileToken(data.token);
+      }
+      if (data.xpaw && (!_pawtectToken || _pawtectToken !== data.xpaw)) {
+        _pawtectToken = data.xpaw;
+        window.__WPA_PAWTECT_TOKEN__ = _pawtectToken;
+        log('🛡️ Enhanced interceptor captured x-pawtect-token');
+        if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
+      }
+      if (data.fp && (!_fp || _fp !== data.fp)) {
+        _fp = data.fp;
+        window.__WPA_FINGERPRINT__ = _fp;
+        log('🆔 Enhanced interceptor captured fingerprint (fp)');
+        if (_pawtectResolve) { _pawtectResolve({ pawtect: _pawtectToken, fp: _fp }); _pawtectResolve = null; }
+      }
+      return;
+    }
+
+    // 3) Direct fp published by site (if any)
     try {
       const msgFp = (typeof data === 'object' && typeof data.fp === 'string' && data.fp.length > 10) ? data.fp : null;
       if (msgFp && (!_fp || _fp !== msgFp)) {
@@ -823,7 +763,7 @@ window.__WPA_SET_TURNSTILE_TOKEN__ = function(token) {
       }
     } catch { /* ignore */ }
 
-    // 3) Heuristic: observe fingerprint ingredients (pi) like xp/pfp/ffp
+    // 4) Heuristic: observe fingerprint ingredients (pi) like xp/pfp/ffp
     try {
       const pi = (typeof data === 'object' && (data.pi || data.payload?.pi)) ? (data.pi || data.payload.pi) : null;
       if (pi && typeof pi === 'object' && (pi.xp || pi.pfp || pi.ffp)) {
@@ -837,7 +777,6 @@ window.__WPA_SET_TURNSTILE_TOKEN__ = function(token) {
       }
     } catch { /* ignore */ }
   });
-})();
 
 // Export the key functions
 export { handleCaptcha, loadTurnstile, executeTurnstile, detectSitekey, invalidateToken };
@@ -870,3 +809,17 @@ export async function waitForPawtect(timeout = 5000) {
   if (!_pawtectResolve) { _pawtectPromise = new Promise((res) => { _pawtectResolve = res; }); }
   return result;
 }
+
+// Initialize enhanced token interceptor
+try {
+  initializeTokenInterceptor({
+    enabled: true,
+    blockOriginalRequests: false // Keep original requests for compatibility
+  });
+  log('🚀 Enhanced token interceptor initialized');
+} catch (error) {
+  log('❌ Failed to initialize enhanced token interceptor:', error);
+}
+
+// Export interceptor control functions
+export { setInterceptorEnabled } from './token-interceptor.js';

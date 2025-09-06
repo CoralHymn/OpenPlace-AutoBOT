@@ -7,20 +7,22 @@ import { initializeLanguage, t } from "../locales/index.js";
 import { loadFarmCfg } from "../core/storage.js";
 import { sessionStart, sessionPing, sessionEnd } from "../core/metrics/client.js";
 import { getMetricsConfig } from "../core/metrics/config.js";
-import { warmUpForTokens, ensureFingerprintReady } from "../core/warmup.js";
+import { prepareTokensForBot } from "../core/warmup.js";
 
 export async function runFarm() {
   log('🚀 Iniciando WPlace Auto-Farm (versión con selección de zona)');
   
   // Inicializar sistema de idiomas
   initializeLanguage();
-  // Warm-up ligero para capturar tokens pronto
-  try { setTimeout(() => { try { warmUpForTokens('farm'); } catch {} }, 800); } catch {}
-  // Gateo: esperar a fp antes de seguir
+  // Preparar tokens con la nueva ventana de captura
   try {
-    const ok = await ensureFingerprintReady('farm', { timeoutMs: 20000, maxAttempts: 6 });
-    if (!ok) log('⚠️ [farm] fp no capturado aún; el primer pintado lo forzará');
-  } catch {}
+    const result = await prepareTokensForBot('Auto-Farm');
+    if (!result.success) {
+      log('⚠️ [farm] Tokens no preparados, continuando con interceptor activo');
+    }
+  } catch (error) {
+    log('❌ [farm] Error preparando tokens:', error);
+  }
   
   // Asegurarse que el estado global existe
   window.__wplaceBot = { ...window.__wplaceBot, farmRunning: true };
@@ -87,8 +89,7 @@ export async function runFarm() {
           return false;
         }
 
-  // Asegurar fp justo antes de iniciar el loop
-  try { await ensureFingerprintReady('farm:start', { timeoutMs: 15000, maxAttempts: 5 }); } catch {}
+  // Los tokens ya están preparados por prepareTokensForBot
 
         // Si no se ha seleccionado una zona, activar automáticamente la selección
         if (!config.POSITION_SELECTED || config.BASE_X === null || config.BASE_Y === null) {
@@ -198,7 +199,7 @@ export async function runFarm() {
           return;
         }
 
-  try { await ensureFingerprintReady('farm:once', { timeoutMs: 15000, maxAttempts: 5 }); } catch {}
+  // Los tokens están manejados por el interceptor activo
 
         const success = await paintOnce(
           config,

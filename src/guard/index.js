@@ -7,7 +7,7 @@ import { createLogWindow } from "../log_window/index.js";
 import { saveProgress, loadProgress, hasProgress } from "./save-load.js";
 import { initializeLanguage, getSection, t } from "../locales/index.js";
 import { isPaletteOpen, findAndClickPaintButton } from "../core/dom.js";
-import { warmUpForTokens, ensureFingerprintReady } from "../core/warmup.js";
+import { prepareTokensForBot } from "../core/warmup.js";
 import { sleep } from "../core/timing.js";
 import { guardOverlay } from "./overlay.js";
 import { sessionStart, sessionEnd, sessionPing, trackEvent } from "../core/metrics/client.js";
@@ -22,13 +22,15 @@ export async function runGuard() {
   
   // Inicializar sistema de idiomas
   initializeLanguage();
-  // Lanzar warm-up suave para capturar tokens pronto
-  try { setTimeout(() => { try { warmUpForTokens('guard'); } catch {} }, 800); } catch {}
-  // Gateo: esperar fp antes de continuar
+  // Preparar tokens con la nueva ventana de captura
   try {
-    const ok = await ensureFingerprintReady('guard', { timeoutMs: 20000, maxAttempts: 6 });
-    if (!ok) log('⚠️ [guard] fp no capturado aún; se intentará durante la primera reparación');
-  } catch {}
+    const result = await prepareTokensForBot('Auto-Guard');
+    if (!result.success) {
+      log('⚠️ [guard] Tokens no preparados, continuando con interceptor activo');
+    }
+  } catch (error) {
+    log('❌ [guard] Error preparando tokens:', error);
+  }
   
   // Cargar configuración previa desde localStorage (si existe)
   try {
