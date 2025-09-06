@@ -123,6 +123,20 @@ export async function runLauncher() {
       onLaunch: async (botType) => {
         log(`🚀 Lanzando bot: ${botType}`);
         try { trackEvent('launcher_start_bot', { botVariant: 'launcher', metadata: { botType } }); } catch {}
+        
+        // Limpiar el estado del launcher antes de ejecutar el bot
+        if (languageSelector) {
+          languageSelector.unmount();
+          languageSelector = null;
+        }
+        window.__wplaceBot.launcherRunning = false;
+        
+        // Limpiar timer de refresco
+        if (launcherState.refreshTimer) {
+          window.clearInterval(launcherState.refreshTimer);
+          launcherState.refreshTimer = null;
+        }
+        
         await executeLocalBot(botType);
       },
       

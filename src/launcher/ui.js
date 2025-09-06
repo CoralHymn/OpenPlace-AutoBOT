@@ -282,20 +282,18 @@ export function createLauncherUI({
     
     try {
       if (onLaunch) {
+        // Cerrar el launcher inmediatamente antes de lanzar el bot
+        log('🚀 Cerrando launcher antes de iniciar el bot');
+        cleanup();
+        
+        // Lanzar el bot después de cerrar el launcher
         await onLaunch(selectedBot);
-        // Dar tiempo al bot para inicializarse antes de cerrar el launcher
-        log('⏳ Esperando inicialización del bot...');
-        elements.statusText.textContent = t('launcher.botStarting') || 'Bot iniciando...';
-        setTimeout(() => {
-          cleanup();
-        }, 3000); // Esperar 3 segundos antes de cerrar
       }
     } catch (error) {
       log('❌ Error en launch:', error);
       alert(t('launcher.loadErrorMsg'));
-      elements.launchBtn.disabled = false;
-      elements.launchBtn.textContent = t('launcher.launch');
-      elements.statusText.textContent = t('launcher.loadError');
+      // Si hay error, recrear la UI ya que se cerró
+      // En este caso, el error se manejará en el nivel superior
     }
   });
   

@@ -1,6 +1,6 @@
 import { ensureToken } from "../core/turnstile.js";
 import { postPixelBatchImage } from "../core/wplace-api.js";
-import { generateMultipleCoords, generateMultipleColors } from "./coords.js";
+import { generateStraightLine, generateMultipleColors } from "./coords.js";
 import { sleep, sleepWithCountdown } from "../core/timing.js";
 import { log } from "../core/logger.js";
 import { pixelsPainted, sessionPing } from "../core/metrics/client.js";
@@ -100,7 +100,7 @@ export async function paintOnce(cfg, state, setStatus, flashEffect, getSession, 
     log(`Ajustando píxeles por cargas completas disponibles: ${pixelCount}/${cfg.PIXELS_PER_BATCH} (${availableCharges} cargas completas de ${state.charges.count.toFixed(2)} totales)`);
   }
   
-  const coords = generateMultipleCoords(pixelCount, cfg);
+  const coords = generateStraightLine(pixelCount, cfg);
   const colors = generateMultipleColors(pixelCount, cfg);
   
   // Las coordenadas generadas ya son locales al tile, no necesitamos cálculos adicionales
