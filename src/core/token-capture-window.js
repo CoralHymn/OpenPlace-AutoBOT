@@ -200,12 +200,10 @@ export function showTokenCaptureWindow({ onTokenCaptured, onSkip, botName = 'Bot
     <div class="body">
       <div class="title">Captura de Sesión Requerida</div>
       <div class="description">
-        Para que el bot funcione correctamente, necesitamos capturar los tokens de tu sesión.
-        Esto solo se hace una vez por sesión.
+        Para que el bot funcione correctamente, es necesario pintar un pixel manualmente.
       </div>
       
 
-      
       <div class="status waiting" id="capture-status">
         ⏳ Esperando inicio de captura...
       </div>
