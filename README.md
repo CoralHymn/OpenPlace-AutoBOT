@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Fast, reliable automation for the new WPlace version.</strong><br/>
-  <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb"><img src="chrome-extension-icon.svg" alt="Install Extension" height="70"/></a><br/>
+  <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb"><img src="src/addons/Auto-bot-extension/icons/chrome-extension-icon.svg" alt="Install Extension" height="70"/></a><br/>
   <em>Best experience: install the browser extension.</em>
 </p>
 
