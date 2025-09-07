@@ -1,14 +1,24 @@
 <p align="center">
   <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb" target="_blank" rel="noopener">
-    <img src="src/addons/Auto-bot-extension/icons/icon128.png" alt="WPlace AutoBOT" width="160" height="160"/>
+    <img src="https://raw.githubusercontent.com/Alarisco/WPlace-AutoBOT/refs/heads/main/src/addons/Auto-bot-extension/icons/icon128.png" alt="WPlace AutoBOT" width="160" height="160"/>
   </a>
 </p>
 
 <h1 align="center">WPLACE-AUTOBOT</h1>
 
+<!-- Badge SOLO en su propio párrafo -->
 <p align="center">
-  <strong>Fast, reliable automation for the new WPlace version.</strong><br/>
-  <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb"><img src="src/addons/Auto-bot-extension/icons/chrome-extension-icon.svg" alt="Install Extension" height="70"/></a><br/>
+  <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb" target="_blank" rel="noopener noreferrer">
+    <img
+      src="https://developer.chrome.com/static/docs/webstore/branding/image/mPGKYBIR2uCP0ApchDXE.png"
+      alt="Available in the Chrome Web Store"
+      height="70"
+    />
+  </a>
+</p>
+
+<!-- Texto en otro párrafo centrado -->
+<p align="center">
   <em>Best experience: install the browser extension.</em>
 </p>
 
