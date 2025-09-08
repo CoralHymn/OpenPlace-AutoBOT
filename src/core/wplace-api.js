@@ -1,6 +1,10 @@
 import { fetchWithTimeout } from "./http.js";
 import { ensureToken, invalidateToken, getPawtectToken, getFingerprint, waitForPawtect } from "./turnstile.js";
+import { ensureFingerprint } from './fingerprint.js';
+import { computePawtect } from './pawtect.js';
 import { log } from "./logger.js";
+import { safeParseResponse } from './json.js';
+// pixel-client eliminado: usamos directamente postPixelBatchImage/postPixel
 
 const BASE = "https://backend.wplace.live";
 
@@ -96,102 +100,35 @@ export async function purchaseProduct(productId = 70, amount = 1) {
   }
 }
 
-// Unifica post de píxel por lotes (batch por tile).
-export async function postPixelBatch({ tileX, tileY, pixels, turnstileToken }) {
-  // pixels: [{x,y,color}, …] relativos al tile -> convertir a coords/colors
-  try { await waitForPawtect(5000); } catch {}
-  let pawtect = getPawtectToken();
-  let fp = getFingerprint();
-  const coords = [];
-  const colors = [];
-  for (const p of pixels || []) {
-    // Asegurar valores válidos 0..999
-    const x = ((Number(p.x) % 1000) + 1000) % 1000;
-    const y = ((Number(p.y) % 1000) + 1000) % 1000;
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      coords.push(x, y);
-      colors.push(p.color?.id ?? p.color?.value ?? p.color ?? 1);
-    }
-  }
-  // Si aún no hay fp, esperar un poco más de forma proactiva
-  if (!fp) { try { await waitForPawtect(2000); } catch {} fp = getFingerprint(); pawtect = getPawtectToken(); }
-  log(`[API] postPixelBatch include: pawtect=${!!pawtect} fp=${!!fp}`);
-  const body = JSON.stringify({ colors, coords, t: turnstileToken, ...(fp ? { fp } : {}) });
-  const r = await fetchWithTimeout(`${BASE}/s0/pixel/${tileX}/${tileY}`, {
-    method: "POST",
-  headers: { "Content-Type": "text/plain;charset=UTF-8", ...(pawtect ? { "x-pawtect-token": pawtect } : {}) },
-    body,
-    credentials: "include"
-  });
-  
-  // Algunas respuestas pueden no traer JSON aunque sean 200.
-  if (r.status === 200) {
-    try { return await r.json(); } catch { return { ok: true }; }
-  }
-  
-  let msg = `HTTP ${r.status}`;
-  try { 
-    const j = await r.json(); 
-    msg = j?.message || msg; 
-  } catch {
-    // Response not JSON
-  }
-  throw new Error(`paint failed: ${msg}`);
-}
-
-// Versión 'safe' que no arroja excepciones y retorna status/json
-export async function postPixelBatchSafe(tileX, tileY, pixels, turnstileToken) {
-  try {
-  try { await waitForPawtect(5000); } catch {}
-  let pawtect = getPawtectToken();
-  let fp = getFingerprint();
-    const coords = [];
-    const colors = [];
-    for (const p of (pixels || [])) {
-      const x = ((Number(p.x) % 1000) + 1000) % 1000;
-      const y = ((Number(p.y) % 1000) + 1000) % 1000;
-      if (Number.isFinite(x) && Number.isFinite(y)) {
-        coords.push(x, y);
-        colors.push(p.color?.id ?? p.color?.value ?? p.color ?? 1);
-      }
-    }
-  if (!fp) { try { await waitForPawtect(2000); } catch {} fp = getFingerprint(); pawtect = getPawtectToken(); }
-  log(`[API] postPixelBatchSafe include: pawtect=${!!pawtect} fp=${!!fp}`);
-  const body = JSON.stringify({ colors, coords, t: turnstileToken, ...(fp ? { fp } : {}) });
-    const r = await fetchWithTimeout(`${BASE}/s0/pixel/${tileX}/${tileY}`, {
-      method: "POST",
-  headers: { "Content-Type": "text/plain;charset=UTF-8", ...(pawtect ? { "x-pawtect-token": pawtect } : {}) },
-      body,
-      credentials: "include",
-      timeout: 20000 // Aumentar timeout a 20 segundos
-    });
-  let json = {};
-  // If response is not JSON, ignore parse error
-  try { json = await r.json(); } catch { /* ignore */ }
-    return { status: r.status, json, success: r.ok };
-  } catch (error) {
-    // Manejo específico para timeouts
-    if (error.name === 'TimeoutError') {
-      return { status: 408, json: { error: `Request timeout after ${error.timeout}ms` }, success: false };
-    }
-    return { status: 0, json: { error: error.message }, success: false };
-  }
-}
+// postPixelBatch / postPixelBatchSafe eliminados
 
 // Post píxel para farm (replicado del ejemplo con manejo de 403)
 export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
   try {
-    // Ensure pawtect tokens are present (best-effort wait)
-  try { await waitForPawtect(5000); } catch {}
-  let pawtect = getPawtectToken();
+    // Intento de cálculo dinámico de pawtect antes de esperar
+  // Fingerprint proactivo si falta
   let fp = getFingerprint();
-  if (!fp) { try { await waitForPawtect(2000); } catch {} fp = getFingerprint(); pawtect = getPawtectToken(); }
-    const body = JSON.stringify({ 
-      colors: colors, 
-      coords: coords, 
-      t: turnstileToken,
-      ...(fp ? { fp } : {})
-    });
+  if (!fp) { try { fp = await ensureFingerprint({}); } catch {} }
+  let pawtect = getPawtectToken();
+    if (!pawtect) {
+      try {
+        const dyn = await computePawtect({ colors, coords, t: turnstileToken, ...(fp ? { fp } : {}) });
+        if (dyn) pawtect = dyn;
+      } catch {}
+    }
+    if (!fp || !pawtect) {
+      try { await waitForPawtect(1500); } catch {}
+      // Releer
+      if (!pawtect) pawtect = getPawtectToken();
+      if (!fp) fp = getFingerprint();
+      if (!pawtect) {
+        try {
+          const dyn2 = await computePawtect({ colors, coords, t: turnstileToken, ...(fp ? { fp } : {}) });
+          if (dyn2) pawtect = dyn2;
+        } catch {}
+      }
+    }
+    const body = JSON.stringify({ colors, coords, t: turnstileToken, ...(fp ? { fp } : {}) });
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000); // Aumentar timeout a 20 segundos
@@ -217,6 +154,12 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
         // re-check fp/pawtect in case they were captured after the first try
         pawtect = getPawtectToken();
         fp = getFingerprint();
+        if (!pawtect) {
+          try {
+            const dyn3 = await computePawtect({ colors, coords, t: newToken, ...(fp ? { fp } : {}) });
+            if (dyn3) pawtect = dyn3;
+          } catch {}
+        }
         
         // Retry the request with new token
         const retryBody = JSON.stringify({ 
@@ -281,6 +224,12 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
   // re-check fp/pawtect as well
   pawtect = getPawtectToken();
   fp = getFingerprint();
+  if (!pawtect) {
+    try {
+      const dyn4 = await computePawtect({ colors, coords, t: newToken, ...(fp ? { fp } : {}) });
+      if (dyn4) pawtect = dyn4;
+    } catch {}
+  }
   const retryBody = JSON.stringify({ colors, coords, t: newToken, ...(fp ? { fp } : {}) });
         const retryController = new AbortController();
         const retryTimeoutId = setTimeout(() => retryController.abort(), 20000); // Aumentar timeout a 20 segundos
@@ -292,33 +241,18 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
           signal: retryController.signal
         });
         clearTimeout(retryTimeoutId);
-        let retryData = null;
-        try { const text = await retryResponse.text(); retryData = text ? JSON.parse(text) : {}; } catch { retryData = {}; }
-        if (retryResponse.ok) {
+  const retryParsed = await safeParseResponse(retryResponse);
+  if (retryResponse.ok) {
           try { invalidateToken(); } catch {}
         }
-        return { status: retryResponse.status, json: retryData, success: retryResponse.ok };
+  return { status: retryResponse.status, json: retryParsed.json, success: retryResponse.ok };
       } catch (e) {
         // Continuar devolviendo el 5xx original si falla
       }
     }
 
-    let responseData = null;
-    try {
-      const text = await response.text();
-      if (text) {
-        responseData = JSON.parse(text);
-      }
-    } catch {
-      responseData = {}; // Ignorar errores de JSON parse
-    }
-
-  // No invalidar el token en éxito: permite reutilización dentro del TTL.
-    return {
-      status: response.status,
-      json: responseData,
-      success: response.ok
-    };
+  const parsed = await safeParseResponse(response);
+  return { status: response.status, json: parsed.json, success: response.ok };
   } catch (error) {
     // Manejo específico para timeouts y abort errors
     if (error.name === 'AbortError' || error.name === 'TimeoutError') {
@@ -340,21 +274,35 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
 export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstileToken) {
   try {
     // Ensure pawtect tokens are present (best-effort wait)
-  try { await waitForPawtect(5000); } catch {}
-  let pawtect = getPawtectToken();
+  // Fingerprint proactivo si falta
   let fp = getFingerprint();
-  if (!fp) { try { await waitForPawtect(2000); } catch {} fp = getFingerprint(); pawtect = getPawtectToken(); }
+  if (!fp) { try { fp = await ensureFingerprint({}); } catch {} }
+  // Siempre intentar cálculo dinámico (override) para evitar mismatch aleatorio
+  let pawtect = null;
+  try {
+    const preview = { colors, coords, t: turnstileToken || 'seed', ...(fp ? { fp } : { fp: 'seed' }) };
+    const dyn = await computePawtect(preview);
+    if (dyn) pawtect = dyn; else pawtect = getPawtectToken();
+  } catch { pawtect = getPawtectToken(); }
+  if (!fp) { try { await waitForPawtect(1200); } catch {} fp = getFingerprint(); }
     // Prepare exact body format as used in example
-    const body = JSON.stringify({ 
+  const body = JSON.stringify({ 
       colors: colors, 
       coords: coords, 
       t: turnstileToken,
       ...(fp ? { fp } : {})
     });
+  // Hash diagnóstico (FNV-1a simplificado) para detectar cuerpos repetidos en 500
+  let bodyHash = '';
+  try {
+    let h = 0x811c9dc5;
+    for (let i=0;i<body.length;i++) { h ^= body.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    bodyHash = ('00000000'+(h>>>0).toString(16)).slice(-8);
+  } catch {}
     
     log(`[API] Sending batch to tile ${tileX},${tileY} with ${colors.length} pixels, token: ${turnstileToken ? turnstileToken.substring(0, 50) + '...' : 'null'}`);
     
-  log(`[API] postPixelBatchImage include: pawtect=${!!pawtect} fp=${!!fp}`);
+  log(`[API] postPixelBatchImage include: pawtect=${!!pawtect} fp=${!!fp} bodyHash=${bodyHash}`);
   const response = await fetch(`${BASE}/s0/pixel/${tileX}/${tileY}`, {
       method: 'POST',
       credentials: 'include',
@@ -388,7 +336,7 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
         }
         
         // Retry the request with new token
-        const retryBody = JSON.stringify({ 
+  const retryBody = JSON.stringify({ 
           colors: colors, 
           coords: coords, 
           t: newToken,
@@ -397,7 +345,7 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
         
         log(`[API] Retrying with fresh token: ${newToken.substring(0, 50)}...`);
         
-        const retryResponse = await fetch(`${BASE}/s0/pixel/${tileX}/${tileY}`, {
+  const retryResponse = await fetch(`${BASE}/s0/pixel/${tileX}/${tileY}`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'text/plain;charset=UTF-8', ...(pawtect ? { 'x-pawtect-token': pawtect } : {}) },
@@ -415,30 +363,13 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
           };
         }
         
-        let retryData = null;
-        try {
-          const text = await retryResponse.text();
-          if (text.trim()) {
-            retryData = JSON.parse(text);
-          } else {
-            retryData = {}; // Empty response
-          }
-        } catch (parseError) {
-          log(`[API] Warning: Could not parse retry response JSON: ${parseError.message}`);
-          retryData = {}; // Use empty object if JSON parse fails
-        }
-        
-        const painted = retryData?.painted || 0;
+  const retryParsed = await safeParseResponse(retryResponse);
+  const painted = retryParsed.json?.painted || 0;
         log(`[API] Retry result: ${painted} pixels painted`);
 
   // No invalidar el token en éxito: permite reutilización dentro del TTL.
 
-        return {
-          status: retryResponse.status,
-          json: retryData,
-          success: retryResponse.ok,
-          painted: painted
-        };
+  return { status: retryResponse.status, json: retryParsed.json, success: retryResponse.ok, painted };
         
       } catch (retryError) {
         console.error("❌ Token regeneration failed:", retryError);
@@ -466,40 +397,24 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
           headers: { 'Content-Type': 'text/plain;charset=UTF-8', ...(pawtect ? { 'x-pawtect-token': pawtect } : {}) },
           body: retryBody
         });
-        let retryData = null;
-        try {
-          const text = await retryResponse.text();
-          retryData = text && text.trim() ? JSON.parse(text) : {};
-        } catch { retryData = {}; }
-        const painted = retryData?.painted || 0;
+  const retryParsed2 = await safeParseResponse(retryResponse);
+  const painted = retryParsed2.json?.painted || 0;
         log(`[API] Retry after ${response.status}: ${painted} pixels painted`);
   // No invalidar el token en éxito: permite reutilización dentro del TTL.
-        return { status: retryResponse.status, json: retryData, success: retryResponse.ok, painted };
+  return { status: retryResponse.status, json: retryParsed2.json, success: retryResponse.ok, painted };
       } catch (e) {
         // Seguir al manejo estándar abajo
       }
     }
 
-    let responseData = null;
-    try {
-      const text = await response.text();
-      if (text.trim()) {
-        responseData = JSON.parse(text);
-      } else {
-        responseData = {}; // Empty response
-      }
-    } catch (parseError) {
-      log(`[API] Warning: Could not parse response JSON: ${parseError.message}`);
-      responseData = {}; // Use empty object if JSON parse fails
-    }
-
-    const painted = responseData?.painted || 0;
+  const finalParsed = await safeParseResponse(response);
+  const painted = finalParsed.json?.painted || 0;
     log(`[API] Success: ${painted} pixels painted`);
 
   // No invalidar el token en éxito: permite reutilización dentro del TTL.
     return {
       status: response.status,
-      json: responseData,
+  json: finalParsed.json,
       success: response.ok,
       painted: painted
     };

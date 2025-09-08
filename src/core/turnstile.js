@@ -1,5 +1,5 @@
 import { log } from "./logger.js";
-import { initializeTokenInterceptor, setInterceptorEnabled } from "./token-interceptor.js";
+// Eliminado token-interceptor: interceptación ya no necesaria
 
 // ========================================
 // TURNSTILE TOKEN MANAGEMENT
@@ -36,10 +36,19 @@ function setTurnstileToken(t) {
   turnstileToken = t;
   tokenExpiryTime = Date.now() + TOKEN_LIFETIME;
   log("✅ Turnstile token set successfully");
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+      window.dispatchEvent(new window.CustomEvent('turnstile:token', { detail: { token: t, expiry: tokenExpiryTime } }));
+    }
+  } catch {}
 }
 
 function isTokenValid() {
   return turnstileToken && Date.now() < tokenExpiryTime;
+}
+
+export function getCachedToken() {
+  return isTokenValid() ? turnstileToken : null;
 }
 
 // Force token invalidation (for 403 errors)
@@ -810,16 +819,4 @@ export async function waitForPawtect(timeout = 5000) {
   return result;
 }
 
-// Initialize enhanced token interceptor
-try {
-  initializeTokenInterceptor({
-    enabled: true,
-    blockOriginalRequests: false // Keep original requests for compatibility
-  });
-  log('🚀 Enhanced token interceptor initialized');
-} catch (error) {
-  log('❌ Failed to initialize enhanced token interceptor:', error);
-}
-
-// Export interceptor control functions
-export { setInterceptorEnabled } from './token-interceptor.js';
+// Interceptor eliminado: flujo pasivo/dinámico sin hooking explícito
