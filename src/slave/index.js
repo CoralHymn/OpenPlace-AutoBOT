@@ -1,6 +1,7 @@
 // Nota: WebSocket y setInterval ya están definidos como globals en eslint.config.js
 
 import { log } from "../core/logger.js";
+import { maybeCompressMessage, tryDecompressWrapper } from "../core/compression.js";
 import { createSlaveUI } from "./ui.js";
 import { SLAVE_CONFIG } from "./config.js"; // eliminado slaveState (no usado)
 import { initializeLanguage } from "../locales/index.js";
@@ -210,7 +211,13 @@ class WPlaceSlave {
       };
 
       this.ws.onmessage = (event) => {
-        this.handleMasterMessage(JSON.parse(event.data));
+        try {
+          const data = JSON.parse(event.data);
+          const msg = tryDecompressWrapper(data);
+          this.handleMasterMessage(msg);
+        } catch (e) {
+          log('⚠️ Error parse/descompresión mensaje master: ' + (e?.message || e));
+        }
       };
 
       this.ws.onclose = () => {
@@ -987,7 +994,13 @@ class WPlaceSlave {
 
   sendToMaster(message) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
+      try {
+        const { json } = maybeCompressMessage(message);
+        this.ws.send(json);
+      } catch (e) {
+        // Fallback plano
+        try { this.ws.send(JSON.stringify(message)); } catch {}
+      }
     }
   }
 

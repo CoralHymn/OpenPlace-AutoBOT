@@ -12,6 +12,7 @@
     "@eslint/js": "^9.5.0",
     "esbuild": "^0.21.5",
     "eslint": "^9.5.0",
-    "prettier": "^3.3.3"
+    "prettier": "^3.3.3",
+    "pako": "^2.1.0"
   }
 }
