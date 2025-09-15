@@ -51,6 +51,49 @@ class WPlaceSlave {
   // Eliminado loop propio de análisis guard inline; se usa módulo Guard
   }
 
+  // Anexa availableColors del guardState al preview si falta
+  augmentPreview(preview) {
+    try {
+      const p = preview && typeof preview === 'object' ? { ...preview } : {};
+      const gs = (typeof window !== 'undefined' && window.guardState) ? window.guardState : null;
+      const colors = (gs && Array.isArray(gs.availableColors)) ? gs.availableColors : (p.availableColors || []);
+      if (!p.availableColors && Array.isArray(colors)) {
+        // Normalizar a objetos {id,r,g,b}
+        p.availableColors = colors.map((c, idx) => {
+          if (c && typeof c === 'object' && ('r' in c) && ('g' in c) && ('b' in c)) {
+            return { id: (c.id ?? idx), r: c.r|0, g: c.g|0, b: c.b|0 };
+          }
+          return c;
+        });
+      }
+      return p;
+    } catch {
+      return preview;
+    }
+  }
+
+  // Envía un mensaje preview_data con preview enriquecido
+  sendPreview(preview) {
+    try {
+      const enriched = this.augmentPreview(preview);
+      this.sendToMaster({ type: 'preview_data', data: enriched });
+    } catch {
+      this.sendToMaster({ type: 'preview_data', data: preview });
+    }
+  }
+
+  // Si hay availableColors conocidos, enviarlos en un preview_data mínimo
+  sendAvailableColorsIfAny() {
+    try {
+      const gs = (typeof window !== 'undefined' && window.guardState) ? window.guardState : null;
+      const colors = (gs && Array.isArray(gs.availableColors)) ? gs.availableColors : [];
+      if (colors && colors.length) {
+        const payload = { availableColors: colors.map((c, i) => ({ id: (c.id ?? i), r: c.r|0, g: c.g|0, b: c.b|0 })) };
+        this.sendToMaster({ type: 'preview_data', data: payload });
+      }
+    } catch {}
+  }
+
   async init(masterUrl) {
   this.masterServerUrl = this.normalizeWsUrl(masterUrl);
     log('🔗 Inicializando WPlace Slave...');
@@ -146,6 +189,15 @@ class WPlaceSlave {
           log(`⚠️ Error enviando métricas de inicio: ${error.message}`);
         }
 
+        // Detectar paleta de colores lo antes posible y enviarla al master
+        // Nota: esto permite que el primer slave conectado ya comparta availableColors
+        try {
+          await ensureGuardColors();
+          this.sendAvailableColorsIfAny();
+        } catch (e) {
+          log('⚠️ No se pudieron detectar/enviar colores al conectar:', e);
+        }
+
         // Enviar telemetría inicial inmediatamente (incluye cargas restantes)
         await this.updateTelemetry();
         this.sendTelemetry();
@@ -237,6 +289,8 @@ class WPlaceSlave {
         if (this.isFavorite) {
           try { await prepareTokensForBot('Slave-Favorite'); } catch {}
           try { await ensureGuardColors(); } catch {}
+          // Enviar paleta disponible inmediatamente si existe
+          try { this.sendAvailableColorsIfAny(); } catch {}
           // Auto-iniciar Guard headless para asegurar preview/telemetría
           try {
             if (this.currentMode !== 'Guard') {
@@ -256,6 +310,8 @@ class WPlaceSlave {
         if (this.isFavorite) {
           try { await prepareTokensForBot('Slave-Favorite'); } catch {}
           try { await ensureGuardColors(); } catch {}
+          // Enviar paleta disponible inmediatamente si existe
+          try { this.sendAvailableColorsIfAny(); } catch {}
           // Auto-iniciar Guard si aún no está corriendo
           try {
             if (this.currentMode !== 'Guard') {
@@ -275,9 +331,9 @@ class WPlaceSlave {
       case 'guardData':
         await modularHandleGuardData(message, {
           setModeIfNeeded: async () => { if (this.currentMode !== 'Guard') await this.setMode('Guard'); },
-          sendPreview: (preview) => this.sendToMaster({ type: 'preview_data', data: preview }),
+          sendPreview: (preview) => this.sendPreview(preview),
           startAnalysisLoop: () => modularStartAutomation({
-            sendPreview: (data)=> this.sendToMaster({ type: 'preview_data', data }),
+            sendPreview: (data)=> this.sendPreview(data),
             sendRepairSuggestion: (res)=> this.sendToMaster({ type: 'repair_suggestion', pixels: res.pixels, totalDiffs: res.totalDiffs, patternUsed: res.patternUsed, auto: true })
           })
         });
@@ -303,12 +359,12 @@ class WPlaceSlave {
           await this.setMode('Guard');
         }
         if (message.action === 'check') {
-          await guardManualCheck({ sendPreview: (data)=> this.sendToMaster({ type: 'preview_data', data }) });
+          await guardManualCheck({ sendPreview: (data)=> this.sendPreview(data) });
         } else if (message.action === 'repair') {
           const params = message.params || {};
           // Modo nuevo: ejecutar un lote inmediato desde slave si limit > 0
           if (params.limit && params.limit > 0) {
-            const suggested = await guardManualRepair(params, { sendPreview: (data)=> this.sendToMaster({ type: 'preview_data', data }) });
+            const suggested = await guardManualRepair(params, { sendPreview: (data)=> this.sendPreview(data) });
             if (suggested && Array.isArray(suggested.pixels) && suggested.pixels.length) {
               this.sendToMaster({ type: 'repair_ack', total_repairs: suggested.pixels.length, source: 'guard_one_batch' });
               this.abortPainting = false;
@@ -323,7 +379,7 @@ class WPlaceSlave {
             }
           } else {
             // Comportamiento anterior: solo sugerir
-            const result = await guardManualRepair(params, { sendPreview: (data)=> this.sendToMaster({ type: 'preview_data', data }) });
+            const result = await guardManualRepair(params, { sendPreview: (data)=> this.sendPreview(data) });
             if (result && Array.isArray(result.pixels)) {
               this.sendToMaster({ type: 'repair_suggestion', pixels: result.pixels, totalDiffs: result.totalDiffs || 0 });
             }
@@ -650,12 +706,10 @@ class WPlaceSlave {
     if (this.isFavorite && this.currentMode === 'Guard') {
       // Esperar un poco para que el Guard procese el archivo
       setTimeout(async () => {
-  const previewData = await modularGetPreviewData();
-        if (previewData) {
-          this.sendToMaster({
-            type: 'preview_data',
-            data: previewData
-          });
+        const previewData = await modularGetPreviewData();
+        const enriched = this.augmentPreview(previewData);
+        if (enriched) {
+          this.sendToMaster({ type: 'preview_data', data: enriched });
           log('📊 Datos de preview enviados al servidor');
         }
       }, 1000);
@@ -911,6 +965,10 @@ class WPlaceSlave {
     // Si este slave es favorito y está en modo Guard, agregar datos de preview
     if (this.isFavorite && this.currentMode === 'Guard') {
       telemetryData.previewData = await modularGetPreviewData();
+      // Añadir availableColors a la telemetría para persistencia inicial
+      try {
+        telemetryData.previewData = this.augmentPreview(telemetryData.previewData);
+      } catch {}
       if (telemetryData.previewData && telemetryData.previewData.analysis) {
         const a = telemetryData.previewData.analysis;
         // Rellenar métricas detalladas para panel realtime
