@@ -212,86 +212,16 @@ class WPlaceSlave {
 
       this.ws.onmessage = async (event) => {
         try {
-          // DEBUGGING: Log detallado del mensaje recibido
-          const messageSize = event.data?.length || 0;
-          log(`📨 [DEBUG] Mensaje recibido - Tamaño: ${messageSize} bytes`);
-          
-          // Detectar mensajes grandes que pueden causar problemas
-          if (messageSize > 1048576) { // >1MB
-            log(`⚠️ [DEBUG] Mensaje grande detectado: ${(messageSize/1048576).toFixed(2)}MB`);
-          }
-          
-          // Intentar parsing JSON con manejo de errores detallado
-          let data;
-          try {
-            data = JSON.parse(event.data);
-            log(`✅ [DEBUG] JSON parseado correctamente`);
-          } catch (parseError) {
-            log(`❌ [DEBUG] Error parsing JSON: ${parseError.message}`);
-            log(`🔍 [DEBUG] Datos recibidos (primeros 500 chars): ${event.data.substring(0, 500)}...`);
-            return;
-          }
-          
-          // Detectar si es un mensaje comprimido y debug decompresión
-          if (data?.type === '__compressed__') {
-            log(`🗜️ [DEBUG] Mensaje comprimido detectado - Encoding: ${data.encoding}`);
-          }
-          
-          // Descomprimir usando función importada
+          const data = JSON.parse(event.data);
           const msg = tryDecompressWrapper(data);
-          
-          // Log específico del contenido del mensaje (truncado para evitar spam)
-          if (msg && typeof msg === 'object') {
-            const logMessage = { ...msg };
-            // Truncar campos grandes para el log
-            Object.keys(logMessage).forEach(key => {
-              if (typeof logMessage[key] === 'object' && logMessage[key] !== null) {
-                const str = JSON.stringify(logMessage[key]);
-                if (str.length > 200) {
-                  logMessage[key] = `[Object: ${str.length} chars]`;
-                }
-              } else if (typeof logMessage[key] === 'string' && logMessage[key].length > 200) {
-                logMessage[key] = logMessage[key].substring(0, 200) + '...';
-              }
-            });
-            log(`📋 [DEBUG] Mensaje tipo: ${msg?.type}, contenido: ${JSON.stringify(logMessage)}`);
-          }
-          
           await this.handleMasterMessage(msg);
         } catch (e) {
-          log('⚠️ [DEBUG] Error procesando mensaje del servidor: ' + (e?.message || e));
-          log(`🔍 [DEBUG] Error stack trace: ${e?.stack || 'No stack available'}`);
+          log('⚠️ Error procesando mensaje del servidor: ' + (e?.message || e));
         }
       };
 
       this.ws.onclose = (event) => {
-        // DEBUGGING: Log detallado del cierre de conexión
-        log(`❌ [DEBUG] Desconectado del servidor maestro - Código: ${event.code}, Razón: "${event.reason || 'Sin razón'}", WasClean: ${event.wasClean}`);
-        
-        // Códigos de cierre específicos para debugging
-        const closeCodeMessages = {
-          1000: 'Cierre normal',
-          1001: 'Endpoint desconectándose',
-          1002: 'Error de protocolo',
-          1003: 'Tipo de datos no soportado',
-          1004: 'Reservado',
-          1005: 'Sin código de estado',
-          1006: 'Cierre anormal',
-          1007: 'Datos inconsistentes',
-          1008: 'Violación de política',
-          1009: 'Mensaje demasiado grande - ESTE ES EL PROBLEMA BUSCADO',
-          1010: 'Extensión obligatoria',
-          1011: 'Error interno del servidor',
-          1015: 'Error de TLS handshake'
-        };
-        
-        const codeMessage = closeCodeMessages[event.code] || `Código desconocido: ${event.code}`;
-        log(`🔍 [DEBUG] Significado del código: ${codeMessage}`);
-        
-        if (event.code === 1009) {
-          log(`🚨 [DEBUG] MENSAJE DEMASIADO GRANDE (1009) - ESTE ES EL PROBLEMA BUSCADO`);
-        }
-        
+        log(`❌ Desconectado del servidor maestro - Código: ${event.code}`);
         this.connectionStatus = 'disconnected';
         this.updateUI();
         // Solo reintentar si no fue desconexión manual
@@ -301,25 +231,7 @@ class WPlaceSlave {
       };
 
       this.ws.onerror = (error) => {
-        // DEBUGGING: Log detallado del error de WebSocket
-        log(`❌ [DEBUG] Error de WebSocket detectado:`);
-        log(`🔍 [DEBUG] Error object: ${JSON.stringify(error, null, 2)}`);
-        log(`🔍 [DEBUG] WebSocket readyState: ${this.ws?.readyState}`);
-        log(`🔍 [DEBUG] WebSocket URL: ${this.ws?.url}`);
-        log(`🔍 [DEBUG] Timestamp: ${new Date().toISOString()}`);
-        
-        // ReadyState meanings
-        const readyStateMessages = {
-          0: 'CONNECTING',
-          1: 'OPEN', 
-          2: 'CLOSING',
-          3: 'CLOSED'
-        };
-        
-        if (this.ws?.readyState !== undefined) {
-          log(`🔍 [DEBUG] ReadyState significado: ${readyStateMessages[this.ws.readyState] || 'UNKNOWN'}`);
-        }
-        
+        log(`❌ Error de WebSocket: ${error}`);
         this.connectionStatus = 'error';
         this.updateUI();
       };
@@ -1110,93 +1022,19 @@ class WPlaceSlave {
   sendToMaster(message) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
-        // DEBUGGING: Log detallado del envío de mensajes
-        const messageStr = JSON.stringify(message);
-        const messageSize = new Blob([messageStr]).size;
-        
-        log(`📤 [DEBUG] Enviando mensaje al master:`);
-        log(`🔍 [DEBUG] Type: ${message.type || 'no-type'}`);
-        log(`🔍 [DEBUG] Message size: ${(messageSize / 1024).toFixed(2)} KB`);
-        
-        if (messageSize > 1024 * 1024) { // > 1MB
-          log(`⚠️ [DEBUG] MENSAJE GRANDE detectado: ${(messageSize / 1024 / 1024).toFixed(2)} MB`);
-        }
-        
-        // Log específico para diferentes tipos de mensajes
-        if (message.type === 'preview_data' && message.data) {
-          const data = message.data;
-          log(`🔍 [DEBUG] Preview data - keys: [${Object.keys(data).join(', ')}]`);
-          if (data.pixels && Array.isArray(data.pixels)) {
-            log(`🔍 [DEBUG] Pixels array length: ${data.pixels.length}`);
-          }
-          if (data.previewData) {
-            log(`🔍 [DEBUG] Preview data nested present`);
-          }
-        }
-        
-        if (message.type === 'repair_suggestion' && message.pixels) {
-          log(`🔍 [DEBUG] Repair suggestion - pixels: ${message.pixels.length}, totalDiffs: ${message.totalDiffs}`);
-        }
-        
-        if (message.type === 'telemetry' && message.data) {
-          const telemetryKeys = Object.keys(message.data);
-          log(`🔍 [DEBUG] Telemetry data - keys: [${telemetryKeys.join(', ')}]`);
-        }
-        
-        // Verificar si podría necesitar compresión
-        if (messageSize > 5 * 1024 * 1024) { // > 5MB threshold
-          log(`⚠️ [DEBUG] Mensaje excede threshold de compresión (5MB): ${(messageSize / 1024 / 1024).toFixed(2)} MB`);
-        }
-        
         const { json } = maybeCompressMessage(message);
-        const compressedSize = new Blob([json]).size;
-        
-        if (compressedSize !== messageSize) {
-          log(`🗜️ [DEBUG] Compresión aplicada: ${(messageSize / 1024).toFixed(2)} KB → ${(compressedSize / 1024).toFixed(2)} KB (ratio: ${(compressedSize/messageSize*100).toFixed(1)}%)`);
-        }
-        
         this.ws.send(json);
-        log(`✅ [DEBUG] Mensaje enviado exitosamente`);
-        
       } catch (e) {
-        log(`❌ [DEBUG] Error en sendToMaster (trying compression):`);
-        log(`🔍 [DEBUG] Error: ${e.message}`);
-        log(`🔍 [DEBUG] Stack: ${e.stack}`);
-        
+        log(`❌ Error enviando mensaje: ${e.message}`);
         // Fallback plano
         try { 
-          log(`🔄 [DEBUG] Intentando fallback sin compresión...`);
-          const fallbackStr = JSON.stringify(message);
-          const fallbackSize = new Blob([fallbackStr]).size;
-          log(`🔍 [DEBUG] Fallback message size: ${(fallbackSize / 1024).toFixed(2)} KB`);
-          
-          if (fallbackSize > 16 * 1024 * 1024) { // > 16MB (likely to fail)
-            log(`⚠️ [DEBUG] FALLBACK MENSAJE MUY GRANDE: ${(fallbackSize / 1024 / 1024).toFixed(2)} MB - probable fallo`);
-          }
-          
-          this.ws.send(fallbackStr);
-          log(`✅ [DEBUG] Fallback enviado exitosamente`);
+          this.ws.send(JSON.stringify(message));
         } catch (fallbackError) {
-          log(`❌ [DEBUG] Error en fallback también:`);
-          log(`🔍 [DEBUG] Fallback error: ${fallbackError.message}`);
+          log(`❌ Error en fallback: ${fallbackError.message}`);
         }
       }
     } else {
-      log(`❌ [DEBUG] Cannot send to master - WebSocket not ready:`);
-      log(`🔍 [DEBUG] ReadyState: ${this.ws?.readyState}`);
-      log(`🔍 [DEBUG] Message type: ${message?.type || 'unknown'}`);
-      
-      // ReadyState meanings
-      const readyStateMessages = {
-        0: 'CONNECTING',
-        1: 'OPEN', 
-        2: 'CLOSING',
-        3: 'CLOSED'
-      };
-      
-      if (this.ws?.readyState !== undefined) {
-        log(`🔍 [DEBUG] ReadyState significado: ${readyStateMessages[this.ws.readyState] || 'UNKNOWN'}`);
-      }
+      log(`❌ WebSocket no disponible para envío (readyState: ${this.ws?.readyState})`);
     }
   }
 

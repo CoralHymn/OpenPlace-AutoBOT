@@ -1,5 +1,5 @@
 // Utilidades de compresión para mensajes WebSocket grandes.
-// Estrategia: si el JSON serializado supera 20MB, se comprime con gzip y se envía
+// Estrategia: si el JSON serializado supera 5MB, se comprime con gzip y se envía
 // dentro de un wrapper { type: '__compressed__', encoding: 'gzip+base64', ... }.
 // En la recepción se detecta y se restaura el objeto original transparente.
 
