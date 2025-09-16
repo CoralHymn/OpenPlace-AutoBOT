@@ -24,6 +24,15 @@
   </a>
 </p>
 
+<!-- Novedad: enlace al repositorio WPlace Master Server -->
+<p align="center">
+  🚀 Nueva herramienta relacionada: <br>
+  <a href="https://github.com/Alarisco/Wplace-AutoBotnet-Server" target="_blank" rel="noopener">
+    WPlace Master Server
+  </a> – servidor central para coordinar bots con interfaz web.
+</p>
+
+
 <!-- Texto en otro párrafo centrado -->
 <p align="center">
   <em>Best experience: install the browser extension.</em>
