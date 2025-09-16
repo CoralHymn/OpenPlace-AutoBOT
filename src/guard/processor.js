@@ -11,6 +11,9 @@ import { getMetricsConfig } from "../core/metrics/config.js";
 
 // Variables para monitoreo de cargas
 let chargeMonitorInterval = null;
+let independentChargeMonitorInterval = null; // Nuevo: monitoreo independiente
+let lastChargeUpdate = null;
+let calculatedCharges = 0;
 let _lastChargeCheck = 0;
 let _isRepairing = false; // Evitar bucles infinitos
 let _countdownInterval = null;
@@ -56,7 +59,7 @@ function stopCountdownTimer() {
 }
 
 /**
- * Inicia el monitoreo periódico de cargas
+ * Inicia el monitoreo periódico de cargas (cuando el bot está activo)
  */
 export function startChargeMonitoring() {
   if (chargeMonitorInterval) {
@@ -65,6 +68,11 @@ export function startChargeMonitoring() {
   }
 
   log('🔄 Iniciando monitoreo de cargas cada 30 segundos...');
+  
+  // Pausar el contador independiente si está activo
+  if (independentChargeMonitorInterval) {
+    log('⏸️ Pausando contador independiente - bot iniciado');
+  }
   
   chargeMonitorInterval = window.setInterval(async () => {
     try {
@@ -77,6 +85,10 @@ export function startChargeMonitoring() {
         // Actualizar estado de cargas
         guardState.currentCharges = sessionResult.data.charges;
         guardState.maxCharges = sessionResult.data.maxCharges;
+        
+        // Sincronizar con el contador independiente
+        calculatedCharges = sessionResult.data.charges;
+        lastChargeUpdate = Date.now();
         
         // Actualizar UI con cargas actuales
         if (guardState.ui) {
@@ -103,17 +115,117 @@ export function startChargeMonitoring() {
 }
 
 /**
- * Detener monitoreo de cargas
+ * Detener monitoreo de cargas (cuando el bot se detiene)
  */
 export function stopChargeMonitoring() {
   if (chargeMonitorInterval) {
     window.clearInterval(chargeMonitorInterval);
     chargeMonitorInterval = null;
     log('🔄 Monitoreo de cargas detenido');
+    
+    // Reanudar el contador independiente si está configurado
+    if (independentChargeMonitorInterval) {
+      log('▶️ Reanudando contador independiente - bot detenido');
+      // El contador independiente seguirá funcionando automáticamente
+      // ya que verifica chargeMonitorInterval en cada iteración
+    }
   }
   
   // También detener el contador
   stopCountdownTimer();
+}
+
+/**
+ * Inicia el monitoreo independiente de cargas (solo cuando el bot NO está corriendo)
+ * Hace una petición inicial y luego calcula las cargas usando un contador interno
+ */
+export function startIndependentChargeMonitoring() {
+  if (independentChargeMonitorInterval) {
+    log('🔄 Monitoreo independiente de cargas ya está activo');
+    return;
+  }
+
+  log('🔄 Iniciando monitoreo independiente de cargas cada 30 segundos...');
+  
+  // Función para obtener cargas iniciales y luego usar contador
+  const initializeChargeTracking = async () => {
+    try {
+      // Solo proceder si el bot no está corriendo
+      if (chargeMonitorInterval) {
+        log('🔄 Bot activo detectado, saltando inicialización independiente');
+        return;
+      }
+
+      const sessionResult = await getSession();
+      if (sessionResult.success) {
+        calculatedCharges = sessionResult.data.charges;
+        guardState.currentCharges = calculatedCharges;
+        guardState.maxCharges = sessionResult.data.maxCharges;
+        lastChargeUpdate = Date.now();
+        
+        const availableCharges = Math.floor(calculatedCharges);
+        if (guardState.ui) {
+          guardState.ui.updateStats({ charges: availableCharges });
+        }
+        
+        log(`🔋 Cargas iniciales obtenidas: ${availableCharges}/${guardState.maxCharges}`);
+      }
+    } catch (error) {
+      log(`Error obteniendo cargas iniciales: ${error.message}`);
+    }
+  };
+
+  // Función para actualizar cargas usando contador interno
+  const updateCalculatedCharges = () => {
+    try {
+      // Solo actualizar si el bot no está corriendo
+      if (chargeMonitorInterval) {
+        return;
+      }
+
+      if (lastChargeUpdate && calculatedCharges < guardState.maxCharges) {
+        const now = Date.now();
+        const timeSinceLastUpdate = now - lastChargeUpdate;
+        const chargesGained = Math.floor(timeSinceLastUpdate / 30000); // 1 carga cada 30 segundos
+        
+        if (chargesGained > 0) {
+          calculatedCharges = Math.min(calculatedCharges + chargesGained, guardState.maxCharges);
+          guardState.currentCharges = calculatedCharges;
+          lastChargeUpdate = now;
+          
+          const availableCharges = Math.floor(calculatedCharges);
+          if (guardState.ui) {
+            guardState.ui.updateStats({ charges: availableCharges });
+          }
+          
+          // Log periódico para debug (opcional, cada 5 minutos)
+          if (!_lastChargeCheck || now - _lastChargeCheck > 300000) { // 5 minutos
+            log(`🔋 Cargas calculadas actualizadas: ${availableCharges}/${guardState.maxCharges}`);
+            _lastChargeCheck = now;
+          }
+        }
+      }
+    } catch (error) {
+      log(`Error actualizando cargas calculadas: ${error.message}`);
+    }
+  };
+
+  // Inicializar cargas y luego actualizar cada 30 segundos
+  initializeChargeTracking();
+  independentChargeMonitorInterval = window.setInterval(updateCalculatedCharges, CHARGE_CHECK_INTERVAL);
+}
+
+/**
+ * Detener monitoreo independiente de cargas
+ */
+export function stopIndependentChargeMonitoring() {
+  if (independentChargeMonitorInterval) {
+    window.clearInterval(independentChargeMonitorInterval);
+    independentChargeMonitorInterval = null;
+    lastChargeUpdate = null;
+    calculatedCharges = 0;
+    log('🔄 Monitoreo independiente de cargas detenido');
+  }
 }
 
 // Funciones para conversión de color RGB a LAB

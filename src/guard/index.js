@@ -1,7 +1,7 @@
 import { log } from "../core/logger.js";
 import { getSession } from "../core/wplace-api.js";
 import { guardState, GUARD_DEFAULTS } from "./config.js";
-import { detectAvailableColors, analyzeAreaPixels, checkForChanges, startChargeMonitoring, stopChargeMonitoring } from "./processor.js";
+import { detectAvailableColors, analyzeAreaPixels, checkForChanges, startChargeMonitoring, stopChargeMonitoring, startIndependentChargeMonitoring, stopIndependentChargeMonitoring } from "./processor.js";
 import { createGuardUI, showConfirmDialog } from "./ui.js";
 import { createLogWindow } from "../log_window/index.js";
 import { saveProgress, loadProgress, hasProgress } from "./save-load.js";
@@ -223,6 +223,9 @@ export async function runGuard() {
         window.__wplaceMetrics.guardFocusHandler = focusHandler;
       }
     } catch {}
+    
+    // Iniciar monitoreo independiente de cargas (funciona aunque el bot no esté iniciado)
+    startIndependentChargeMonitoring();
     
     log('✅ Auto-Guard cargado correctamente');
     
@@ -612,6 +615,9 @@ function stopGuard() {
   
   // Detener monitoreo de cargas
   stopChargeMonitoring();
+  
+  // Detener monitoreo independiente de cargas
+  stopIndependentChargeMonitoring();
   
   // Finalizar sesión de métricas si estaba activa
   try {

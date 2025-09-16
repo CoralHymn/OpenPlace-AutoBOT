@@ -395,15 +395,42 @@ class WPlaceSlave {
           const newMode = await guardToggleWatchMode();
           this.sendToMaster({ type: 'status', status: 'watch_toggled', watchMode: newMode });
         } else if (message.action === 'clear') {
-          // Abortar pintura en curso y limpiar estado de Guard, mantener telemetría en idle
+          // Abortar pintura en curso y limpiar estado completo del slave
           try {
             this.abortPainting = true;
+            
+            // Detener cualquier bot en ejecución
+            if (this.isRunning) {
+              await this.stopBot();
+            }
+            
+            // Limpiar estado de Guard
             const ok = await guardClearState();
-            // Enviar estado y una vista previa vacía para que el servidor limpie
+            
+            // Reset completo del slave - volver a estado inicial
+            this.currentMode = null;
+            this.projectData = null;
+            this.isRunning = false;
+            
+            // Limpiar telemetría
+            this.telemetryData = {
+              repaired_pixels: 0,
+              missing_pixels: 0,
+              absent_pixels: 0,
+              remaining_charges: 0
+            };
+            
+            // Enviar estado confirmando limpieza
             this.sendToMaster({ type: 'status', status: ok ? 'cleared' : 'clear_error' });
+            
             // Enviar telemetría inmediata post-clear
             await this.updateTelemetry();
             this.sendTelemetry();
+            
+            // Actualizar UI para reflejar el reset
+            this.updateUI();
+            
+            log('🧹 Slave completamente limpiado - vuelto a estado inicial');
           } catch (e) {
             this.sendToMaster({ type: 'status', status: 'clear_error', error: String(e?.message || e) });
           }
