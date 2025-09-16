@@ -50,8 +50,7 @@ const _atob = (b64) => {
   return str;
 };
 
-const THRESHOLD = 20 * 1024 * 1024; // 20MB
-
+const THRESHOLD = 5 * 1024 * 1024; 
 function bytesToBase64(bytes) {
   if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
   let binary = '';
