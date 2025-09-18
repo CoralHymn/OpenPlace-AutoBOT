@@ -83,6 +83,29 @@ export function createResizeWindow() {
         
         <!-- Aquí se insertará el selector de paleta de colores -->
         
+        <!-- Sección Skip Color -->
+        <div class="skip-color-section" style="display: none; margin-top: 15px; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 15px; border: 1px solid rgba(255,255,255,0.1);">
+          <div class="skip-color-title" style="font-size: 14px; font-weight: 600; color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center;">
+            <span>🎯 Skip Color</span>
+          </div>
+          <div class="skip-color-controls" style="display: flex; flex-direction: column; gap: 12px;">
+            <label style="color: #ffffff; font-size: 14px; display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" class="skip-color-enabled" style="cursor: pointer;">
+              <span>Skip colors that don't match exactly</span>
+            </label>
+            <div class="skip-threshold-container" style="display: none; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label style="color: #ffffff; font-size: 14px; white-space: nowrap;">Similarity threshold:</label>
+                <input type="range" class="skip-threshold-slider" min="0" max="100" step="1" value="100" style="flex: 1;">
+                <span class="skip-threshold-value" style="color: #aaa; font-size: 12px; min-width: 35px;">100%</span>
+              </div>
+              <div class="skip-threshold-description" style="font-size: 12px; color: #aaa; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; border-left: 3px solid #60a5fa;">
+                <span class="skip-description-text">Only exact color matches will be painted (100% similarity).</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
         <div class="resize-buttons" style="display: flex; gap: 10px; margin-top: 20px;">
           <button class="btn btn-primary confirm-resize" style="flex: 1; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">✅ Aplicar</button>
           <button class="btn btn-secondary cancel-resize" style="flex: 1; padding: 10px; background: #ef4444; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">❌ Cancelar</button>
@@ -123,11 +146,17 @@ export function createResizeWindow() {
       minimizeBtn: resizeWindow.querySelector('#minimizeResizeBtn'),
       closeBtn: resizeWindow.querySelector('#closeResizeBtn'),
       resizeContent: resizeWindow.querySelector('.resize-content'),
-      previewInfo: resizeWindow.querySelector('.resize-preview-info')
-  ,
-  toggleOriginal: resizeWindow.querySelector('.toggle-original'),
-  labTolerance: resizeWindow.querySelector('.lab-tolerance'),
-  labToleranceValue: resizeWindow.querySelector('.lab-tolerance-value')
+      previewInfo: resizeWindow.querySelector('.resize-preview-info'),
+      toggleOriginal: resizeWindow.querySelector('.toggle-original'),
+      labTolerance: resizeWindow.querySelector('.lab-tolerance'),
+      labToleranceValue: resizeWindow.querySelector('.lab-tolerance-value'),
+      // Skip Color elements
+      skipColorSection: resizeWindow.querySelector('.skip-color-section'),
+      skipColorEnabled: resizeWindow.querySelector('.skip-color-enabled'),
+      skipThresholdContainer: resizeWindow.querySelector('.skip-threshold-container'),
+      skipThresholdSlider: resizeWindow.querySelector('.skip-threshold-slider'),
+      skipThresholdValue: resizeWindow.querySelector('.skip-threshold-value'),
+      skipDescriptionText: resizeWindow.querySelector('.skip-description-text')
     };
 
     // Evitar arrastre nativo dentro de la ventana (especialmente imágenes)
@@ -351,8 +380,15 @@ export function createResizeWindow() {
     // Event listener para el botón de confirmar
      function handleConfirm() {
        const selectedColors = getSelectedColors();
+       
+       // Obtener configuración de Skip Color
+       const skipConfig = {
+         enabled: resizeElements.skipColorEnabled ? resizeElements.skipColorEnabled.checked : false,
+         threshold: resizeElements.skipThresholdSlider ? parseInt(resizeElements.skipThresholdSlider.value) || 100 : 100
+       };
+       
        if (handlers.onConfirmResize) {
-         handlers.onConfirmResize(processor, currentWidth, currentHeight, selectedColors);
+         handlers.onConfirmResize(processor, currentWidth, currentHeight, selectedColors, skipConfig);
        }
        closeResizeDialog();
      }
@@ -380,6 +416,87 @@ export function createResizeWindow() {
          setupColorPalette(imageState.availableColors);
        }
      }
+
+    // Mostrar la sección Skip Color después de configurar la paleta
+    if (resizeElements.skipColorSection) {
+      resizeElements.skipColorSection.style.display = 'block';
+    }
+
+    // Funciones para manejar Skip Color
+    function updateSkipDescription(threshold) {
+      if (!resizeElements.skipDescriptionText) return;
+      
+      if (threshold === 100) {
+        resizeElements.skipDescriptionText.textContent = "Only exact color matches will be painted (100% similarity).";
+      } else if (threshold >= 90) {
+        resizeElements.skipDescriptionText.textContent = `Very strict matching: colors must be at least ${threshold}% similar to be painted.`;
+      } else if (threshold >= 70) {
+        resizeElements.skipDescriptionText.textContent = `Moderate matching: colors must be at least ${threshold}% similar to be painted.`;
+      } else if (threshold >= 50) {
+        resizeElements.skipDescriptionText.textContent = `Loose matching: colors must be at least ${threshold}% similar to be painted.`;
+      } else {
+        resizeElements.skipDescriptionText.textContent = `Very loose matching: colors must be at least ${threshold}% similar to be painted.`;
+      }
+    }
+
+    function handleSkipColorToggle() {
+      const isEnabled = resizeElements.skipColorEnabled.checked;
+      
+      if (resizeElements.skipThresholdContainer) {
+        resizeElements.skipThresholdContainer.style.display = isEnabled ? 'flex' : 'none';
+      }
+      
+      // Aplicar configuración al processor
+      if (processor && typeof processor.setSkipColorMode === 'function') {
+        const threshold = parseInt(resizeElements.skipThresholdSlider.value) || 100;
+        processor.setSkipColorMode(isEnabled, threshold);
+      }
+      
+      // Actualizar preview inmediatamente
+      const selectedIds = resizeElements.colorPaletteSelector?.getSelectedColors?.() || [];
+      const sourceColors = imageState?.availableColors || [];
+      const byId = new Map(sourceColors.map(c => [c.id, c]));
+      const palette = selectedIds.map(id => byId.get(id)).filter(Boolean);
+      updatePreview(true, palette);
+      
+      log(`🎯 Skip Color ${isEnabled ? 'enabled' : 'disabled'}`);
+    }
+
+    function handleSkipThresholdChange() {
+      const threshold = parseInt(resizeElements.skipThresholdSlider.value) || 100;
+      resizeElements.skipThresholdValue.textContent = `${threshold}%`;
+      
+      updateSkipDescription(threshold);
+      
+      // Aplicar configuración al processor
+      if (processor && typeof processor.setSkipColorMode === 'function') {
+        const isEnabled = resizeElements.skipColorEnabled.checked;
+        processor.setSkipColorMode(isEnabled, threshold);
+      }
+      
+      // Actualizar preview inmediatamente
+      const selectedIds = resizeElements.colorPaletteSelector?.getSelectedColors?.() || [];
+      const sourceColors = imageState?.availableColors || [];
+      const byId = new Map(sourceColors.map(c => [c.id, c]));
+      const palette = selectedIds.map(id => byId.get(id)).filter(Boolean);
+      updatePreview(true, palette);
+    }
+
+    // Event listeners para Skip Color
+    if (resizeElements.skipColorEnabled) {
+      resizeElements.skipColorEnabled.removeEventListener('change', handleSkipColorToggle);
+      resizeElements.skipColorEnabled.addEventListener('change', handleSkipColorToggle);
+    }
+    
+    if (resizeElements.skipThresholdSlider) {
+      resizeElements.skipThresholdSlider.removeEventListener('input', handleSkipThresholdChange);
+      resizeElements.skipThresholdSlider.addEventListener('input', handleSkipThresholdChange);
+      
+      // Inicializar valores por defecto
+      resizeElements.skipThresholdSlider.value = '100';
+      resizeElements.skipThresholdValue.textContent = '100%';
+      updateSkipDescription(100);
+    }
      
      // Configurar callback de selección de color
      if (resizeElements.colorPaletteSelector && resizeElements.colorPaletteSelector.onSelectionChange) {

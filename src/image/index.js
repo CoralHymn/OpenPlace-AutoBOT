@@ -706,11 +706,17 @@ export async function runImage() {
         }
       },
       
-      onConfirmResize: async (processor, newWidth, newHeight, selectedColors) => {
+      onConfirmResize: async (processor, newWidth, newHeight, selectedColors, skipConfig) => {
         log(`🔄 Redimensionando imagen de ${processor.getDimensions().width}x${processor.getDimensions().height} a ${newWidth}x${newHeight}`);
         log(`🎨 Colores seleccionados: ${selectedColors ? selectedColors.length : 'todos'}`);
+        log(`🎯 Skip Color config: ${skipConfig ? JSON.stringify(skipConfig) : 'none'}`);
         
         try {
+          // Aplicar configuración Skip Color al processor
+          if (skipConfig && typeof processor.setSkipColorMode === 'function') {
+            processor.setSkipColorMode(skipConfig.enabled, skipConfig.threshold);
+          }
+          
           // Redimensionar la imagen usando Blue Marble
           await processor.resize(newWidth, newHeight);
           
@@ -722,13 +728,19 @@ export async function runImage() {
             processor.setSelectedColors(selectedColorObjects);
             log(`🎨 Paleta actualizada con ${selectedColors.length} colores seleccionados`);
           }
-          // Importante: remapear la imagen al estado actual de paleta/tolerancia para que el overlay
-          // se base en el resultado final del procesador (no en la imagen original)
-          try {
-            await processor.remapImageToPalette();
-            log('✅ Imagen remapeada tras redimensionado/selección antes de generar overlay');
-          } catch (e) {
-            log('⚠️ Error remapeando imagen tras redimensionado:', e);
+          
+          // Solo remapear si Skip Color NO está activo, para preservar colores originales
+          if (!skipConfig || !skipConfig.enabled) {
+            // Importante: remapear la imagen al estado actual de paleta/tolerancia para que el overlay
+            // se base en el resultado final del procesador (no en la imagen original)
+            try {
+              await processor.remapImageToPalette();
+              log('✅ Imagen remapeada tras redimensionado/selección antes de generar overlay');
+            } catch (e) {
+              log('⚠️ Error remapeando imagen tras redimensionado:', e);
+            }
+          } else {
+            log('🎯 Skip Color activo: manteniendo imagen original sin remapear');
           }
           
           // Reanalizar imagen con nuevo tamaño usando Blue Marble (ya remapeada)

@@ -37,9 +37,13 @@ export class BlueMarblelImageProcessor {
     this.initialAllowedColorsSet = null;
     // Paleta de colores disponibles para matching de cercanía
     this.allowedColors = [];
-  // Nuevo: tolerancia LAB y backups
-  this.labTolerance = 100; // tolerancia LAB por defecto (intenta siempre el más próximo)
-  this.originalBitmap = null; // copia sin procesar
+    // Nuevo: tolerancia LAB y backups
+    this.labTolerance = 100; // tolerancia LAB por defecto (intenta siempre el más próximo)
+    this.originalBitmap = null; // copia sin procesar
+    
+    // Skip Color configuration
+    this.skipColorModeEnabled = false;
+    this.skipColorThreshold = 100; // 100% = only exact matches
   }
 
   async load() {
@@ -67,18 +71,84 @@ export class BlueMarblelImageProcessor {
     this.labTolerance = Number.isFinite(distance) ? Math.max(0, distance) : Infinity;
   }
 
+  /**
+   * Configura el modo Skip Color
+   * @param {boolean} enabled - Si está habilitado el modo skip color
+   * @param {number} threshold - Umbral de similitud (0-100)
+   */
+  setSkipColorMode(enabled, threshold = 100) {
+    this.skipColorModeEnabled = !!enabled;
+    this.skipColorThreshold = Math.max(0, Math.min(100, threshold || 100));
+    
+    log(`[BLUE MARBLE] Skip Color Mode: ${this.skipColorModeEnabled ? 'enabled' : 'disabled'} (threshold: ${this.skipColorThreshold}%)`);
+  }
+
+  /**
+   * Calcula la similitud entre dos colores como porcentaje
+   * @param {number} r1, g1, b1 - Color original
+   * @param {number} r2, g2, b2 - Color de comparación
+   * @returns {number} Porcentaje de similitud (0-100)
+   */
+  calculateColorSimilarity(r1, g1, b1, r2, g2, b2) {
+    // Calcular diferencia Euclidiana en espacio RGB
+    const deltaR = r1 - r2;
+    const deltaG = g1 - g2;
+    const deltaB = b1 - b2;
+    
+    const distance = Math.sqrt(deltaR * deltaR + deltaG * deltaG + deltaB * deltaB);
+    const maxDistance = Math.sqrt(255 * 255 * 3); // Máxima distancia posible
+    
+    // Convertir a porcentaje de similitud (100% = idéntico, 0% = completamente diferente)
+    const similarity = ((maxDistance - distance) / maxDistance) * 100;
+    return Math.max(0, Math.min(100, similarity));
+  }
+
+  /**
+   * Verifica si un color pasa el filtro de Skip Color
+   * @param {number} originalR, originalG, originalB - Color original de la imagen
+   * @param {number} paletteR, paletteG, paletteB - Color de la paleta
+   * @returns {boolean} True si el color pasa el filtro
+   */
+  passesSkipColorFilter(originalR, originalG, originalB, paletteR, paletteG, paletteB) {
+    if (!this.skipColorModeEnabled) {
+      return true; // Skip Color deshabilitado, todos los colores pasan
+    }
+    
+    if (this.skipColorThreshold === 100) {
+      // Threshold al 100% = solo colores exactos
+      return originalR === paletteR && originalG === paletteG && originalB === paletteB;
+    }
+    
+    // Calcular similitud y verificar si supera el threshold
+    const similarity = this.calculateColorSimilarity(originalR, originalG, originalB, paletteR, paletteG, paletteB);
+    return similarity >= this.skipColorThreshold;
+  }
+
   generateOriginalPreview(maxWidth = 200, maxHeight = 200) {
     // Preview de la imagen original sin remapear
     if (!this.originalBitmap) return this.generatePreview(maxWidth, maxHeight);
+    
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const { width: origWidth, height: origHeight } = this.originalBitmap;
     const aspectRatio = origWidth / origHeight;
+    
     let newWidth, newHeight;
     if (maxWidth / maxHeight > aspectRatio) {
-      newHeight = maxHeight; newWidth = maxHeight * aspectRatio;
-    } else { newWidth = maxWidth; newHeight = maxWidth / aspectRatio; }
-    canvas.width = newWidth; canvas.height = newHeight; ctx.imageSmoothingEnabled = false;
+      newHeight = Math.round(maxHeight);
+      newWidth = Math.round(maxHeight * aspectRatio);
+    } else { 
+      newWidth = Math.round(maxWidth);
+      newHeight = Math.round(maxWidth / aspectRatio);
+    }
+    
+    // Asegurar dimensiones mínimas
+    newWidth = Math.max(1, newWidth);
+    newHeight = Math.max(1, newHeight);
+    
+    canvas.width = newWidth;
+    canvas.height = newHeight;
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(this.originalBitmap, 0, 0, newWidth, newHeight);
     return canvas.toDataURL();
   }
@@ -203,12 +273,15 @@ export class BlueMarblelImageProcessor {
     // Analizando píxeles...
 
     try {
+      // En modo Skip Color, usar imagen original para análisis correcto
+      const sourceBitmap = (this.skipColorModeEnabled && this.originalBitmap) ? this.originalBitmap : this.bitmap;
+      
       // Crear canvas de inspección a escala 1:1
       const inspectCanvas = new OffscreenCanvas(this.imageWidth, this.imageHeight);
       const inspectCtx = inspectCanvas.getContext('2d', { willReadFrequently: true });
       inspectCtx.imageSmoothingEnabled = false;
       inspectCtx.clearRect(0, 0, this.imageWidth, this.imageHeight);
-      inspectCtx.drawImage(this.bitmap, 0, 0);
+      inspectCtx.drawImage(sourceBitmap, 0, 0);
       const inspectData = inspectCtx.getImageData(0, 0, this.imageWidth, this.imageHeight).data;
 
       let required = 0;
@@ -237,6 +310,7 @@ export class BlueMarblelImageProcessor {
           // Verificar si es un color exacto primero
           let matchedKey = key;
           let isValidPixel = this.allowedColorsSet.has(key);
+          let finalR = r, finalG = g, finalB = b;
           
           // Si no es exacto, usar algoritmo LAB para encontrar el color más cercano
           if (!isValidPixel && this.allowedColors && this.allowedColors.length > 0) {
@@ -247,8 +321,19 @@ export class BlueMarblelImageProcessor {
               });
             
             if (closestColor) {
-              matchedKey = `${closestColor.r},${closestColor.g},${closestColor.b}`;
+              finalR = closestColor.r;
+              finalG = closestColor.g;
+              finalB = closestColor.b;
+              matchedKey = `${finalR},${finalG},${finalB}`;
               isValidPixel = true;
+            }
+          }
+
+          // Aplicar filtro Skip Color si está habilitado
+          if (isValidPixel && this.skipColorModeEnabled) {
+            const passesFilter = this.passesSkipColorFilter(r, g, b, finalR, finalG, finalB);
+            if (!passesFilter) {
+              isValidPixel = false; // Skip este píxel
             }
           }
 
@@ -446,11 +531,14 @@ export class BlueMarblelImageProcessor {
     const baseX = this.coords[0] * 1000 + (this.coords[2] || 0); // Coordenada global base X
     const baseY = this.coords[1] * 1000 + (this.coords[3] || 0); // Coordenada global base Y
 
+    // En modo Skip Color, usar imagen original para leer píxeles exactos
+    const sourceBitmap = (this.skipColorModeEnabled && this.originalBitmap) ? this.originalBitmap : this.bitmap;
+    
     // Usar canvas 1:1 para leer píxeles exactos
     const readCanvas = new OffscreenCanvas(this.imageWidth, this.imageHeight);
     const readCtx = readCanvas.getContext('2d', { willReadFrequently: true });
     readCtx.imageSmoothingEnabled = false;
-    readCtx.drawImage(this.bitmap, 0, 0);
+    readCtx.drawImage(sourceBitmap, 0, 0);
     const pixelData = readCtx.getImageData(0, 0, this.imageWidth, this.imageHeight).data;
 
     // Debug: Contadores para depuración
@@ -460,6 +548,7 @@ export class BlueMarblelImageProcessor {
     let exactMatches = 0;
     let labMatches = 0;
     let invalidPixels = 0;
+    let skipColorFiltered = 0; // Nuevo contador para píxeles filtrados por Skip Color
 
     for (let y = 0; y < this.imageHeight; y++) {
         for (let x = 0; x < this.imageWidth; x++) {
@@ -508,6 +597,16 @@ export class BlueMarblelImageProcessor {
                 isValidPixel = true;
                 labMatches++;
               }
+            }
+          }
+          
+          // Aplicar filtro Skip Color si está habilitado
+          if (isValidPixel && this.skipColorModeEnabled) {
+            const passesFilter = this.passesSkipColorFilter(r, g, b, finalR, finalG, finalB);
+            if (!passesFilter) {
+              isValidPixel = false; // Skip este píxel
+              skipColorFiltered++;
+              continue;
             }
           }
           
@@ -563,6 +662,7 @@ export class BlueMarblelImageProcessor {
     log(`[BLUE MARBLE DEBUG] - Coincidencias exactas: ${exactMatches}`);
     log(`[BLUE MARBLE DEBUG] - Coincidencias LAB: ${labMatches}`);
     log(`[BLUE MARBLE DEBUG] - Píxeles inválidos: ${invalidPixels}`);
+    log(`[BLUE MARBLE DEBUG] - Skip Color filtrados: ${skipColorFiltered}`);
     log(`[BLUE MARBLE DEBUG] - Cola final: ${queue.length} píxeles`);
 
     log(`[BLUE MARBLE] Cola: ${queue.length} píxeles`);
@@ -580,39 +680,72 @@ export class BlueMarblelImageProcessor {
     const originalWidth = this.img.width;
     const originalHeight = this.img.height;
 
+    // Calcular nuevas dimensiones respetando proporción si está habilitado
     if (keepAspectRatio) {
       const aspectRatio = originalWidth / originalHeight;
       if (newWidth / newHeight > aspectRatio) {
-        newWidth = newHeight * aspectRatio;
+        newWidth = Math.round(newHeight * aspectRatio);
       } else {
-        newHeight = newWidth / aspectRatio;
+        newHeight = Math.round(newWidth / aspectRatio);
       }
+    } else {
+      // Asegurar que las dimensiones sean enteros
+      newWidth = Math.round(newWidth);
+      newHeight = Math.round(newHeight);
     }
 
-    // Crear nueva imagen redimensionada
+    log(`[BLUE MARBLE] Redimensionando: ${originalWidth}×${originalHeight} → ${newWidth}×${newHeight}`);
+
+    // Crear nueva imagen redimensionada usando la imagen original
+    const sourceImage = this.originalBitmap || this.img;
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = newWidth;
     tempCanvas.height = newHeight;
     const tempCtx = tempCanvas.getContext('2d');
     tempCtx.imageSmoothingEnabled = false; // Pixel art
-    tempCtx.drawImage(this.img, 0, 0, newWidth, newHeight);
+    
+    // Dibujar desde la fuente original para mantener calidad
+    tempCtx.drawImage(sourceImage, 0, 0, newWidth, newHeight);
 
-    // Actualizar imagen y bitmap
-    const newDataUrl = tempCanvas.toDataURL();
+    // Crear nuevo blob y URL
+    const newBlob = await new Promise(resolve => tempCanvas.toBlob(resolve));
+    const newDataUrl = URL.createObjectURL(newBlob);
+    
+    // Actualizar imagen principal
     this.img.src = newDataUrl;
     this.imageSrc = newDataUrl;
 
+    // Esperar a que la imagen se cargue y actualizar bitmaps
     await new Promise(resolve => {
       this.img.onload = async () => {
-        this.bitmap = await createImageBitmap(this.img);
-        this.imageWidth = this.bitmap.width;
-        this.imageHeight = this.bitmap.height;
-        this.totalPixels = this.imageWidth * this.imageHeight;
-        resolve();
+        try {
+          // Actualizar bitmap principal
+          this.bitmap = await createImageBitmap(this.img);
+          
+          // Actualizar originalBitmap también para mantener consistencia
+          this.originalBitmap = this.bitmap;
+          
+          // Actualizar dimensiones
+          this.imageWidth = this.bitmap.width;
+          this.imageHeight = this.bitmap.height;
+          this.totalPixels = this.imageWidth * this.imageHeight;
+          
+          log(`[BLUE MARBLE] Bitmap actualizado: ${this.imageWidth}×${this.imageHeight}`);
+          resolve();
+        } catch (error) {
+          log(`[BLUE MARBLE ERROR] Error actualizando bitmap:`, error);
+          resolve(); // Continuar aunque haya error
+        }
       };
+      
+      // Timeout de seguridad
+      setTimeout(() => {
+        log(`[BLUE MARBLE WARNING] Timeout esperando carga de imagen redimensionada`);
+        resolve();
+      }, 5000);
     });
 
-    log(`[BLUE MARBLE] Imagen redimensionada: ${originalWidth}×${originalHeight} → ${this.imageWidth}×${this.imageHeight}`);
+    log(`[BLUE MARBLE] Imagen redimensionada exitosamente: ${originalWidth}×${originalHeight} → ${this.imageWidth}×${this.imageHeight}`);
     
     return {
       width: this.imageWidth,
@@ -647,17 +780,23 @@ export class BlueMarblelImageProcessor {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    const { width: origWidth, height: origHeight } = this.img;
+    // Usar dimensiones actuales del procesador (no del img que puede estar desactualizado)
+    const origWidth = this.imageWidth || this.img.width;
+    const origHeight = this.imageHeight || this.img.height;
     const aspectRatio = origWidth / origHeight;
 
     let newWidth, newHeight;
     if (maxWidth / maxHeight > aspectRatio) {
-      newHeight = maxHeight;
-      newWidth = maxHeight * aspectRatio;
+      newHeight = Math.round(maxHeight);
+      newWidth = Math.round(maxHeight * aspectRatio);
     } else {
-      newWidth = maxWidth;
-      newHeight = maxWidth / aspectRatio;
+      newWidth = Math.round(maxWidth);
+      newHeight = Math.round(maxWidth / aspectRatio);
     }
+
+    // Asegurar dimensiones mínimas
+    newWidth = Math.max(1, newWidth);
+    newHeight = Math.max(1, newHeight);
 
     canvas.width = newWidth;
     canvas.height = newHeight;
@@ -778,10 +917,35 @@ export class BlueMarblelImageProcessor {
           const closest = ColorUtils.findClosestPaletteColor(r, g, b, palette, { useLegacyRgb: false, whiteThreshold: 240, maxDistance: this.labTolerance });
           if (closest) {
             const cr = closest.r ?? closest.rgb?.r; const cg = closest.g ?? closest.rgb?.g; const cb = closest.b ?? closest.rgb?.b;
-            data[idx] = cr; data[idx + 1] = cg; data[idx + 2] = cb; data[idx + 3] = 255; lab++;
+            
+            // Aplicar filtro Skip Color si está habilitado
+            if (this.skipColorModeEnabled) {
+              const passesFilter = this.passesSkipColorFilter(r, g, b, cr, cg, cb);
+              if (!passesFilter) {
+                // No pasa el filtro, remover píxel
+                data[idx + 3] = 0; 
+                removed++;
+                continue;
+              }
+            }
+            
+            data[idx] = cr; data[idx + 1] = cg; data[idx + 2] = cb; data[idx + 3] = 255; 
+            lab++;
           } else {
             // No hay opción en selección, remover
             data[idx + 3] = 0; removed++;
+          }
+        } else {
+          // Color exacto encontrado - verificar Skip Color si está habilitado
+          if (this.skipColorModeEnabled) {
+            const passesFilter = this.passesSkipColorFilter(r, g, b, r, g, b); // mismo color
+            if (!passesFilter) {
+              // No pasa el filtro (esto solo puede pasar si threshold < 100%), remover píxel
+              data[idx + 3] = 0;
+              removed++;
+              exact--; // Ajustar contador
+              continue;
+            }
           }
         }
       }
