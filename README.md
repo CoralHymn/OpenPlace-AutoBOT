@@ -13,7 +13,8 @@
   </a>
 </p>
 
-<!-- Badge SOLO en su propio párrafo -->
+
+<!-- Badges de Chrome y Firefox -->
 <p align="center">
   <a href="https://chromewebstore.google.com/detail/kjbodcmljdmjmcjdhoghcclejpmgfeoj?utm_source=item-share-cb" target="_blank" rel="noopener noreferrer">
     <img
@@ -22,7 +23,16 @@
       height="70"
     />
   </a>
+  &nbsp;&nbsp;
+  <a href="https://addons.mozilla.org/es-ES/firefox/addon/wplace-autobot-launcher/" target="_blank" rel="noopener noreferrer">
+    <img
+      src="https://logos-world.net/wp-content/uploads/2021/08/Firefox-Logo.png"
+      alt="Firefox Add-on"
+      height="70"
+    />
+  </a>
 </p>
+
 
 <!-- Novedad: enlace al repositorio WPlace Master Server -->
 <p align="center">
