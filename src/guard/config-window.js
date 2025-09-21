@@ -106,7 +106,7 @@ export default function _createConfigWindow() {
   content.innerHTML = `
     <div id="configGrid" style="display:grid;grid-template-columns:1fr;gap:16px;transition:grid-template-columns 0.3s ease;">
       <div style="background:#2d3748;padding:12px;border-radius:8px;border:1px solid #4a5568;">
-        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;">� Modo de Operación</h3>
+        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;"> Modo de Operación</h3>
         <select id="operationModeSelect" style="width:100%;padding:8px;background:#374151;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;font-family:'Segoe UI Emoji',Arial,sans-serif;">
           <option value="protect">🛡️ Proteger - Reparar píxeles cambiados</option>
           <option value="erase">🗑️ Borrar - Convertir píxeles a transparente</option>
@@ -114,7 +114,7 @@ export default function _createConfigWindow() {
       </div>
 
       <div style="background:#2d3748;padding:12px;border-radius:8px;border:1px solid #4a5568;">
-        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;">�🛡️ Patrones de Protección</h3>
+        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;"�🛡️ Patrones de Protección</h3>
         <select id="protectionPatternSelect" style="width:100%;padding:8px;background:#374151;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;font-family:'Segoe UI Emoji',Arial,sans-serif;">
           <option value="random">🎲 Aleatorio</option>
           <option value="lineUp">⬆️ Lineal (Arriba)</option>
