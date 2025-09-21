@@ -65,7 +65,6 @@ export function createGuardUI(texts) {
           </button>
         </div>
         
-        <!-- Fila 1: Iniciar / Detener -->
         <div style="display: flex; gap: 10px; margin-bottom: 10px;">
           <button id="startBtn" style="flex: 1; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; opacity: 0.5;" disabled>
             ▶️ ${texts.startProtection}
@@ -286,6 +285,17 @@ export function createGuardUI(texts) {
     showAreaSection: () => {
       elements.initSection.style.display = 'none';
       elements.areaSection.style.display = 'block';
+      
+      // Sincronizar el texto del botón start con la configuración
+      const { guardState } = window;
+      if (guardState && guardState.operationMode) {
+        // Actualizar el texto del botón start según el modo
+        if (guardState.operationMode === 'erase') {
+          elements.startBtn.innerHTML = '🗑️ Iniciar Borrado';
+        } else {
+          elements.startBtn.innerHTML = '▶️ Iniciar Protección';
+        }
+      }
     },
 
     setInitButtonVisible: (visible) => {

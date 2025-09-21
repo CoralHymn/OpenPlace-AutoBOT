@@ -106,17 +106,25 @@ export default function _createConfigWindow() {
   content.innerHTML = `
     <div id="configGrid" style="display:grid;grid-template-columns:1fr;gap:16px;transition:grid-template-columns 0.3s ease;">
       <div style="background:#2d3748;padding:12px;border-radius:8px;border:1px solid #4a5568;">
-        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;">🛡️ Patrones de Protección</h3>
-        <select id="protectionPatternSelect" style="width:100%;padding:8px;background:#374151;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;">
+        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;">� Modo de Operación</h3>
+        <select id="operationModeSelect" style="width:100%;padding:8px;background:#374151;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;font-family:'Segoe UI Emoji',Arial,sans-serif;">
+          <option value="protect">🛡️ Proteger - Reparar píxeles cambiados</option>
+          <option value="erase">🗑️ Borrar - Convertir píxeles a transparente</option>
+        </select>
+      </div>
+
+      <div style="background:#2d3748;padding:12px;border-radius:8px;border:1px solid #4a5568;">
+        <h3 style="margin:0 0 8px 0;font-size:14px;color:#e2e8f0;">�🛡️ Patrones de Protección</h3>
+        <select id="protectionPatternSelect" style="width:100%;padding:8px;background:#374151;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;font-family:'Segoe UI Emoji',Arial,sans-serif;">
           <option value="random">🎲 Aleatorio</option>
           <option value="lineUp">⬆️ Lineal (Arriba)</option>
           <option value="lineDown">⬇️ Lineal (Abajo)</option>
           <option value="lineLeft">⬅️ Lineal (Izquierda)</option>
           <option value="lineRight">➡️ Lineal (Derecha)</option>
           <option value="center">🎯 Centro</option>
-          <option value="borders">🧱 Bordes</option>
+          <option value="borders">🟧 Bordes</option>
           <option value="spiral">🌀 Espiral</option>
-          <option value="zigzag">📝 Zigzag (Escritura)</option>
+          <option value="zigzag">〰️ Zigzag (Escritura)</option>
           <option value="diagonal">📐 Diagonal (Lectura)</option>
           <option value="cluster">🔗 Clusters (Agrupado)</option>
           <option value="wave">🌊 Ondas (Natural)</option>
@@ -124,7 +132,7 @@ export default function _createConfigWindow() {
           <option value="sweep">🧹 Barrido (Sistemático)</option>
           <option value="priority">⭐ Prioridad (Inteligente)</option>
           <option value="proximity">🤝 Proximidad (Cercano)</option>
-          <option value="quadrant">🔲 Cuadrantes (Rotativo)</option>
+          <option value="quadrant">⬜ Cuadrantes (Rotativo)</option>
           <option value="scattered">💫 Disperso (Espaciado)</option>
           <option value="snake">🐍 Serpiente (Zigzag Filas)</option>
           <option value="diagonalSweep">↗️ Barrido Diagonal</option>
@@ -294,6 +302,26 @@ function setupResponsiveLayout(windowElement) {
 }
 
 function setupEventListeners(overlay){
+  const operationModeSelect = overlay.querySelector('#operationModeSelect');
+  if (operationModeSelect) {
+    operationModeSelect.addEventListener('change', () => {
+      const newMode = operationModeSelect.value;
+      guardState.operationMode = newMode;
+      
+      // Actualizar el texto del botón start según el modo en la UI principal
+      if (guardState.ui && guardState.ui.elements) {
+        if (newMode === 'erase') {
+          guardState.ui.elements.startBtn.innerHTML = '🗑️ Iniciar Borrado';
+        } else {
+          guardState.ui.elements.startBtn.innerHTML = '▶️ Iniciar Protección';
+        }
+      }
+      
+      log(`🔧 Modo de operación cambiado a: ${newMode}`);
+      persistConfiguration();
+    });
+  }
+
   const patternSelect = overlay.querySelector('#protectionPatternSelect');
   if (patternSelect) {
     patternSelect.addEventListener('change', () => {
@@ -569,6 +597,7 @@ function loadExcludeColorSelector(overlay){
 }
 
 function loadConfiguration(overlay){
+  overlay.querySelector('#operationModeSelect').value = guardState.operationMode || 'protect';
   overlay.querySelector('#protectionPatternSelect').value = guardState.protectionPattern;
   const preferColorCheckbox = overlay.querySelector('#preferColorCheckbox');
   preferColorCheckbox.checked = guardState.preferColor;
@@ -612,6 +641,7 @@ function loadConfiguration(overlay){
 function persistConfiguration(){
   try {
     const toSave = {
+      operationMode: guardState.operationMode,
       protectionPattern: guardState.protectionPattern,
       preferColor: guardState.preferColor,
       preferredColorId: guardState.preferredColorId, // legado
@@ -634,6 +664,7 @@ function persistConfiguration(){
 
 function resetConfiguration(overlay){
   if(!window.confirm('¿Restablecer configuración por defecto?')) return;
+  guardState.operationMode = 'protect';
   guardState.protectionPattern = 'random';
   guardState.preferColor = false;
   guardState.preferredColorIds = [];

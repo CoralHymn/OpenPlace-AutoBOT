@@ -25,6 +25,12 @@ export const PROTECTION_PATTERNS = {
   
 };
 
+// Modos de operación
+export const OPERATION_MODES = {
+  protect: "Proteger",
+  erase: "Borrar"
+};
+
 // Estado global del Guard
 export const guardState = {
   running: false,
@@ -45,6 +51,7 @@ export const guardState = {
   pixelsPerBatch: GUARD_DEFAULTS.PIXELS_PER_BATCH,
   minChargesToWait: GUARD_DEFAULTS.MIN_CHARGES_TO_WAIT,
   protectionPattern: GUARD_DEFAULTS.PROTECTION_PATTERN,
+  operationMode: "protect", // "protect" o "erase"
   
   // Nuevas opciones de configuración
   preferColor: false,

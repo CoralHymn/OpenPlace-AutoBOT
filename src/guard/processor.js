@@ -534,6 +534,113 @@ export async function analyzeAreaPixels(area, options = {}) {
   return pixelMap;
 }
 
+/**
+ * Función específica para el modo borrado
+ * Analiza un área y devuelve solo los píxeles que NO son transparentes (id ≠ 0)
+ */
+export async function analyzeAreaForErasing(area) {
+  const { x1, y1, x2, y2 } = area;
+  log(`🗑️ Analizando área para borrado: (${x1},${y1}) a (${x2},${y2})`);
+  
+  const pixelsToErase = new Map();
+  
+  // Obtener tiles únicos que cubren el área
+  const startTileX = Math.floor(x1 / GUARD_DEFAULTS.TILE_SIZE);
+  const startTileY = Math.floor(y1 / GUARD_DEFAULTS.TILE_SIZE);
+  const endTileX = Math.floor(x2 / GUARD_DEFAULTS.TILE_SIZE);
+  const endTileY = Math.floor(y2 / GUARD_DEFAULTS.TILE_SIZE);
+  
+  // Analizar tile por tile
+  for (let tileY = startTileY; tileY <= endTileY; tileY++) {
+    for (let tileX = startTileX; tileX <= endTileX; tileX++) {
+      try {
+        const tileBlob = await getTileImage(tileX, tileY);
+        if (!tileBlob) {
+          log(`⚠️ No se pudo obtener tile ${tileX},${tileY}, continuando...`);
+          continue;
+        }
+
+        // Crear canvas para analizar la imagen
+        const img = new Image();
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = URL.createObjectURL(tileBlob);
+        });
+
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        // Analizar píxeles en el área especificada de este tile
+        const tileStartX = tileX * GUARD_DEFAULTS.TILE_SIZE;
+        const tileStartY = tileY * GUARD_DEFAULTS.TILE_SIZE;
+        const tileEndXExclusive = tileStartX + GUARD_DEFAULTS.TILE_SIZE;
+        const tileEndYExclusive = tileStartY + GUARD_DEFAULTS.TILE_SIZE;
+        
+        // Calcular intersección del área con este tile
+        const areaEndXExclusive = x2 + 1;
+        const areaEndYExclusive = y2 + 1;
+        const analyzeStartX = Math.max(x1, tileStartX);
+        const analyzeStartY = Math.max(y1, tileStartY);
+        const analyzeEndXExclusive = Math.min(areaEndXExclusive, tileEndXExclusive);
+        const analyzeEndYExclusive = Math.min(areaEndYExclusive, tileEndYExclusive);
+        
+        for (let globalY = analyzeStartY; globalY < analyzeEndYExclusive; globalY++) {
+          for (let globalX = analyzeStartX; globalX < analyzeEndXExclusive; globalX++) {
+            const localXRaw = globalX - tileStartX;
+            const localYRaw = globalY - tileStartY;
+            const localX = ((localXRaw % 1000) + 1000) % 1000;
+            const localY = ((localYRaw % 1000) + 1000) % 1000;
+            
+            // Verificar que estamos dentro de los límites del tile
+            if (localX >= 0 && localX < GUARD_DEFAULTS.TILE_SIZE && 
+                localY >= 0 && localY < GUARD_DEFAULTS.TILE_SIZE) {
+              
+              if (localX < canvas.width && localY < canvas.height) {
+                const pixelIndex = (localY * canvas.width + localX) * 4;
+                const r = data[pixelIndex];
+                const g = data[pixelIndex + 1];
+                const b = data[pixelIndex + 2];
+                const a = data[pixelIndex + 3];
+                
+                if (a > 0) { // Píxel visible
+                  const closestColor = findClosestColor(r, g, b, guardState.availableColors);
+                  if (closestColor && closestColor.id !== 0) { // Solo píxeles NO transparentes
+                    pixelsToErase.set(`${globalX},${globalY}`, {
+                      r, g, b,
+                      colorId: closestColor.id,
+                      globalX,
+                      globalY,
+                      localX,
+                      localY,
+                      tileX,
+                      tileY
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        URL.revokeObjectURL(img.src);
+      } catch (error) {
+        log(`❌ Error analizando tile ${tileX},${tileY} para borrado:`, error);
+      }
+    }
+  }
+
+  log(`🗑️ Análisis para borrado completado: ${pixelsToErase.size} píxeles no transparentes encontrados`);
+  return pixelsToErase;
+}
+
 // Actualizar estadísticas de análisis en la UI principal
 function updateAnalysisStatsInUI(originalPixels, currentPixels) {
   if (!guardState.ui || !guardState.ui.updateAnalysisStats) {
@@ -595,6 +702,49 @@ export async function checkForChanges() {
   }
 
   try {
+    // En modo borrado, analizar el área buscando píxeles no transparentes
+    if (guardState.operationMode === 'erase') {
+      const pixelsToErase = await analyzeAreaForErasing(guardState.protectionArea);
+      
+      if (pixelsToErase.size === 0) {
+        // No hay píxeles no transparentes, el área está completamente borrada
+        guardState.lastCheck = Date.now();
+        if (guardState.ui) {
+          guardState.ui.updateStatus('✅ Área completamente borrada - todos los píxeles son transparentes', 'success');
+          guardState.ui.updateProgress(0, guardState.originalPixels.size, false);
+        }
+        return;
+      }
+      
+      // Crear "cambios" para todos los píxeles no transparentes encontrados
+      const changes = new Map();
+      for (const [key, pixel] of pixelsToErase) {
+        changes.set(key, {
+          timestamp: Date.now(),
+          type: 'erase',
+          original: pixel, // El píxel actual no transparente
+          current: pixel,
+          targetColorId: 0 // Color objetivo: transparente
+        });
+      }
+      
+      log(`🗑️ Detectados ${pixelsToErase.size} píxeles no transparentes para borrar`);
+      guardState.changes = changes;
+      
+      if (guardState.ui) {
+        guardState.ui.updateStatus(`🗑️ ${pixelsToErase.size} píxeles no transparentes detectados`, 'warning');
+        guardState.ui.updateProgress(pixelsToErase.size, guardState.originalPixels.size, false);
+      }
+      
+      // Iniciar proceso de borrado si está habilitado y no está en modo vigía
+      if (guardState.running && !guardState.watchMode) {
+        await repairChanges(changes);
+      }
+      
+      return;
+    }
+
+    // Modo protección normal: analizar píxeles actuales vs originales
     const currentPixels = await analyzeAreaPixels(guardState.protectionArea);
 
     // Si el análisis actual está vacío pero tenemos píxeles originales virtuales,
@@ -933,6 +1083,10 @@ export async function repairChanges(changes) {
         // Para intrusiones, usar las coordenadas del píxel actual pero pintar de blanco
         targetPixel = change.current;
         targetColorId = 5; // Blanco para borrar la intrusión
+      } else if (change.type === 'erase') {
+        // Para borrado, usar las coordenadas del píxel original pero pintar transparente
+        targetPixel = change.original;
+        targetColorId = 0; // Transparente para borrar
       } else {
         // Para cambios normales, restaurar al color original
         targetPixel = change.original;

@@ -39,6 +39,7 @@ export async function runGuard() {
       const cfg = JSON.parse(raw);
       if (cfg && typeof cfg === 'object') {
         if (typeof cfg.protectionPattern === 'string') guardState.protectionPattern = cfg.protectionPattern;
+        if (typeof cfg.operationMode === 'string') guardState.operationMode = cfg.operationMode;
         if (typeof cfg.preferColor === 'boolean') guardState.preferColor = cfg.preferColor;
         if (Array.isArray(cfg.preferredColorIds)) {
           guardState.preferredColorIds = cfg.preferredColorIds;
@@ -560,15 +561,24 @@ async function startGuard() {
   }
   
   guardState.running = true;
-  guardState.watchMode = false; // Modo protección completa
+  guardState.watchMode = false;
   guardState.totalRepaired = 0; // Resetear contador para "gastar todos los píxeles al iniciar"
   guardState.ui.setRunningState(true);
-  guardState.ui.updateStatus(t('guard.protectionStarted'), 'success');
   
-  log('🛡️ Iniciando protección del área');
-  try { trackEvent('mode_change', { botVariant: 'auto-guard', metadata: { mode: 'protect' } }); } catch {}
+  // Comportamiento según el modo de operación
+  if (guardState.operationMode === 'erase') {
+    // Modo borrado: comportamiento continuo como protección
+    guardState.ui.updateStatus('🗑️ Protección de borrado iniciada', 'success');
+    log('🗑️ Iniciando protección de borrado del área');
+    try { trackEvent('mode_change', { botVariant: 'auto-guard', metadata: { mode: 'erase' } }); } catch {}
+  } else {
+    // Modo protección: comportamiento normal
+    guardState.ui.updateStatus(t('guard.protectionStarted'), 'success');
+    log('🛡️ Iniciando protección del área');
+    try { trackEvent('mode_change', { botVariant: 'auto-guard', metadata: { mode: 'protect' } }); } catch {}
+  }
   
-  // Configurar intervalo de verificación
+  // Configurar intervalo de verificación para ambos modos
   guardState.checkInterval = setInterval(checkForChanges, GUARD_DEFAULTS.CHECK_INTERVAL);
   
   // Iniciar monitoreo de cargas
