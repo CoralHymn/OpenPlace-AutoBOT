@@ -20,7 +20,7 @@ const DEFAULTS = Object.freeze({
   VARIANT: 'auto-guard',         // Variant por defecto; cada bot debe sobreescribirlo
   TIMEOUT_MS: 10000,             // Timeout de requests
   RETRIES: 1,                    // Reintentos básicos para ingesta
-  PING_INTERVAL_MS: 2 * 60 * 1000 // 2 minutos para session_ping (mejor reflejo de usuarios online)
+  PING_INTERVAL_MS: 5 * 60 * 1000 // 5 minutos para session_ping (mejor reflejo de usuarios online)
 });
 
 function readFromUrl() {
@@ -72,8 +72,11 @@ function sanitize(cfg) {
   if (typeof out.BASE_URL === 'string') {
     out.BASE_URL = out.BASE_URL.replace(/\/$/, '');
   }
-  // Normalizar variant
-  if (!['auto-guard', 'auto-farm', 'auto-image', 'launcher'].includes(out.VARIANT)) {
+  // Normalizar variant permitiendo nuevas variantes personalizadas
+  if (typeof out.VARIANT === 'string') {
+    const normalized = out.VARIANT.trim();
+    out.VARIANT = normalized ? normalized : DEFAULTS.VARIANT;
+  } else {
     out.VARIANT = DEFAULTS.VARIANT;
   }
   return out;

@@ -151,7 +151,17 @@ export async function paintOnce(cfg, state, setStatus, flashEffect, getSession, 
     
   // Mensaje de éxito sin referencia a radio
   setStatus(`✅ Lote pintado: ${actualPainted}/${pixelCount} píxeles en zona (${cfg.BASE_X},${cfg.BASE_Y})`, 'success');
-  try { pixelsPainted(actualPainted, { botVariant: 'auto-farm', metadata: { tileX: cfg.TILE_X, tileY: cfg.TILE_Y } }); } catch {}
+  try {
+    const metadata = {
+      details: `Lote pintado: ${actualPainted}/${pixelCount} px en tile (${cfg.TILE_X},${cfg.TILE_Y}) · base (${cfg.BASE_X},${cfg.BASE_Y})` ,
+      tile: { x: cfg.TILE_X, y: cfg.TILE_Y },
+      base: { x: cfg.BASE_X, y: cfg.BASE_Y },
+      painted_count: actualPainted,
+      batch_size: pixelCount,
+      radius: cfg.FARM_RADIUS
+    };
+    pixelsPainted(actualPainted, { botVariant: 'auto-farm', metadata });
+  } catch {}
     // Ping de presencia como respaldo si ha pasado suficiente tiempo desde el último
     try {
       const mcfg = getMetricsConfig();

@@ -85,7 +85,7 @@ export async function sendEvent({ botVariant, eventType, pixelDelta, timestamp, 
   const anon = getAnonymousId();
   if (anon) {
     const userHash = await computeUserHash(anon);
-    if (userHash) body.user_hash = await userHash;
+    if (userHash) body.user_hash = userHash;
   }
 
   return send(body, overrides);

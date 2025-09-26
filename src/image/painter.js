@@ -350,7 +350,16 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
         
         // Reportar métricas del lote actual
         try {
-          pixelsPainted(result.painted + skippedCount, { botVariant: 'auto-image' });
+          const metadata = {
+            details: `Lote pintado: ${result.painted + skippedCount}/${batch.length} px · patrón ${imageState.paintPattern} · restantes ${imageState.remainingPixels.length}`,
+            batch_size: batch.length,
+            painted_count: result.painted,
+            skipped_count: skippedCount,
+            pattern: imageState.paintPattern,
+            remaining_pixels: imageState.remainingPixels.length,
+            tile: { x: imageState.tileX, y: imageState.tileY }
+          };
+          pixelsPainted(result.painted + skippedCount, { botVariant: 'auto-image', metadata });
         } catch (e) {
           log('⚠️ Error reportando métricas:', e);
         }

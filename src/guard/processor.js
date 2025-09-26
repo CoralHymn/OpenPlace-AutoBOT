@@ -1358,13 +1358,17 @@ export async function repairChanges(changes) {
             const mcfg = getMetricsConfig({ VARIANT: 'auto-guard' });
             if (mcfg.ENABLED) {
               // Enviar por lote (tile) para granularidad sin saturar
+              const metadata = {
+                details: `Tile (${tileX},${tileY}) reparado: ${result.painted}/${tileChanges.length} px · pendientes ${guardState.changes.size}`,
+                tile: { x: tileX, y: tileY },
+                batch_size: tileChanges.length,
+                repaired_count: result.painted,
+                pending_after: guardState.changes.size,
+                charges_remaining: Math.max(0, guardState.currentCharges)
+              };
               pixelsRepaired(result.painted, {
                 botVariant: 'auto-guard',
-                metadata: {
-                  tileX, tileY,
-                  batchSize: tileChanges.length,
-                  pendingAfter: guardState.changes.size
-                }
+                metadata
               });
             }
           } catch {}
