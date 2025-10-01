@@ -47,7 +47,21 @@ export async function repairPixels({ pixels, tileSize = 1000, sendToMaster, shou
   for (const p of pixels) {
     const gx = Math.trunc(p.x);
     const gy = Math.trunc(p.y);
-    const color = Math.trunc(p.expectedColor ?? p.color ?? 0);
+    
+    // Extraer colorId soportando múltiples formatos:
+    // 1. Guard nuevo: {original: {colorId: X}}
+    // 2. Guard slave: {expectedColor: X}
+    // 3. Directo: {color: X}
+    // 4. Especial: {targetColorId: X}
+    let color = 0;
+    if (p.targetColorId !== undefined && p.targetColorId !== null) {
+      color = Math.trunc(p.targetColorId);
+    } else if (p.original && typeof p.original === 'object' && p.original.colorId !== undefined && p.original.colorId !== null) {
+      color = Math.trunc(p.original.colorId);
+    } else {
+      color = Math.trunc(p.expectedColor ?? p.color ?? 0);
+    }
+    
     const tileX = Math.floor(gx / tileSize);
     const tileY = Math.floor(gy / tileSize);
     const lx = gx - tileX * tileSize;
