@@ -469,15 +469,25 @@ export async function performGuardAnalysis({ sendPreview, force } = {}) {
       }
       continue;
     }
+    
     let isMatch;
-    if (method === 'lab') {
+    
+    // IMPORTANTE: Verificar colorId primero para distinguir transparente (colorId=0) de negro (colorId>0 con RGB 0,0,0)
+    if (originalPixel.colorId === 0 || cur.colorId === 0) {
+      // Si uno es transparente, solo coinciden si ambos son transparentes
+      isMatch = (originalPixel.colorId === cur.colorId);
+    } else if (originalPixel.r === null || originalPixel.g === null || originalPixel.b === null ||
+               cur.r === null || cur.g === null || cur.b === null) {
+      // Si alguno tiene valores RGB null, comparar solo por colorId
+      isMatch = (originalPixel.colorId === cur.colorId);
+    } else if (method === 'lab') {
       // Calcular LAB actual bajo demanda (no cacheado aún); se podría cachear también
       const curLab = rgbToLabArray(cur.r, cur.g, cur.b);
       const origLab = originalPixel.lab || rgbToLabArray(originalPixel.r, originalPixel.g, originalPixel.b);
       const dE = deltaE76(origLab, curLab);
       isMatch = dE <= threshold; // Reutiliza threshold para LAB (configurable a futuro separado)
     } else {
-      const maxDiff = Math.max(Math.abs(originalPixel.r - cur.r), Math.abs(originalPixel.g - cur.g), Math.abs(originalPixel.b - cur.b));
+      const maxDiff = Math.abs(originalPixel.r - cur.r) + Math.abs(originalPixel.g - cur.g) + Math.abs(originalPixel.b - cur.b);
       isMatch = maxDiff <= threshold;
     }
     const [x,y]=key.split(',').map(Number);
