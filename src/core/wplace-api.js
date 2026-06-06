@@ -176,7 +176,7 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
         } catch {}
       }
     }
-  const body = JSON.stringify({ colors: colorsNorm, coords: coordsNorm, t: turnstileToken, ...(fp ? { fp } : {}) });
+  const body = JSON.stringify({ colors: colorsNorm, coords: coordsNorm, ...(turnstileToken ? { t: turnstileToken } : {}), ...(fp ? { fp } : {}) });
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000); // Aumentar timeout a 20 segundos
@@ -210,10 +210,10 @@ export async function postPixel(coords, colors, turnstileToken, tileX, tileY) {
         }
         
         // Retry the request with new token
-        const retryBody = JSON.stringify({ 
+  const retryBody = JSON.stringify({ 
           colors: colorsNorm, 
           coords: coordsNorm, 
-          t: newToken,
+          ...(newToken ? { t: newToken } : {}),
           ...(fp ? { fp } : {})
         });
         
@@ -380,8 +380,8 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
     // Prepare exact body format as used in example
   const body = JSON.stringify({ 
       colors: colorsNorm, 
-      coords: coordsNorm, 
-      t: turnstileToken,
+      coords: coordsNorm,
+      ...(turnstileToken ? { t: turnstileToken } : {}),
       ...(fp ? { fp } : {})
     });
   // Hash diagnóstico (FNV-1a simplificado) para detectar cuerpos repetidos en 500

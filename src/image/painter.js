@@ -464,7 +464,7 @@ export async function paintPixelBatch(batch, providedToken = null) {
     }
 
   // Obtener un único token (reutilizar si se pasa desde nivel superior)
-  const token = providedToken || await ensureToken();
+  const token = providedToken !== undefined ? providedToken : await ensureToken();
 
     let totalPainted = 0;
     for (const { coords, colors, tx, ty } of byTile.values()) {

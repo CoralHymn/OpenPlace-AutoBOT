@@ -150,6 +150,12 @@ class TurnstileManager {
           return token;
         }
 
+        // 如果是因为私服没有 Turnstile，直接返回 null，不走 fallback
+        if (token === null && !this._cachedSitekey) {
+          log("🔍 私服模式，无需 Turnstile token");
+          return null;
+        }
+
         // If invisible fails, force browser automation
         log("⚠️ Invisible Turnstile failed, forcing browser automation...");
         const fallbackToken = await this.handleCaptchaFallback();
@@ -180,6 +186,11 @@ class TurnstileManager {
     const startTime = Date.now();
     try {
       const sitekey = this.detectSitekey();
+      // 私服无 Turnstile，直接跳过
+      if (!sitekey) {
+        log("🔍 私服模式，跳过 Turnstile 验证");
+        return null;
+      }
       log("🔑 Generating Turnstile token for sitekey:", sitekey);
       if (typeof window !== 'undefined' && window.navigator) {
         log('🧭 UA:', window.navigator.userAgent, 'Platform:', window.navigator.platform);
@@ -365,11 +376,11 @@ class TurnstileManager {
     log('👀 Falling back to interactive Turnstile (visible).');
     try { this.showUserNotificationTopCenter('🔄 Resolviendo CAPTCHA...', 'info'); } catch {}
 
-    // Sistema de reintentos indefinidos con timeout inicial de 15s
+    // Sistema de reintentos con timeout inicial de 15s (máx 3 intentos, luego saltar)
     let attempt = 1;
     let hasShownFirstRetryNotification = false;
     
-    while (true) {
+    while (attempt <= 3) {
       const currentTimeout = attempt === 1 ? this.INITIAL_TIMEOUT : this.RETRY_INTERVAL;
       log(`🔄 Intento ${attempt} de resolución del CAPTCHA (timeout: ${currentTimeout/1000}s)...`);
       
@@ -413,6 +424,10 @@ class TurnstileManager {
       attempt++;
       this.metrics.retries++;
     }
+    // 私服无 Turnstile 验证，跳过 token
+    log('⚠️ Turnstile no disponible (私服模式), 跳过验证');
+    this.showUserNotification('⚠️ 无验证码，跳过验证继续绘画', 'info');
+    return null;
   }
 
   /**
@@ -534,7 +549,7 @@ class TurnstileManager {
    */
   detectSitekey(fallback = '0x4AAAAAABpqJe8FO0N84q0F') {
     // Cache sitekey to avoid repeated DOM queries
-    if (this._cachedSitekey) {
+    if (this._cachedSitekey !== undefined) {
       return this._cachedSitekey;
     }
 
@@ -580,9 +595,10 @@ class TurnstileManager {
       log('Error detecting sitekey:', error);
     }
     
-    log("🔍 Using fallback sitekey:", fallback);
-    this._cachedSitekey = fallback;
-    return fallback;
+    // 私服无 Turnstile，不使用 fallback
+    log("🔍 无 Turnstile 元素，跳过验证（私服模式）");
+    this._cachedSitekey = null;
+    return null;
   }
 
   /**
