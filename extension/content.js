@@ -290,7 +290,7 @@
     panelEl.innerHTML = [
       "<div class=\"wpab-header\" id=\"wpab-header\">",
       "<span class=\"wpab-logo\">\uD83E\uDD16</span>",
-      "<span class=\"wpab-title\">WPlace AutoBOT</span>",
+      "<span class=\"wpab-title\">骷髅打金服 南瓜BOT</span>",
       "<button class=\"wpab-close\" id=\"wpab-close\" title=\"\u5173\u95ed\">\u2715</button>",
       "</div>",
       "<div class=\"wpab-body\" id=\"wpab-body\">",
