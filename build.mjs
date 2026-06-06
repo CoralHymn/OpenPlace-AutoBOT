@@ -16,6 +16,7 @@ Opciones:
   --launcher     Compilar solo Auto-Launcher.js
   --guard        Compilar solo Auto-Guard.js
   --slave        Compilar solo Auto-Slave.js
+  --extension    Compilar para extension (output en extension/bots/)
   --help         Mostrar esta ayuda
 
 Ejemplos:
@@ -45,6 +46,7 @@ const buildImage = args.has("--image");
 const buildLauncher = args.has("--launcher");
 const buildGuard = args.has("--guard");
 const buildSlave = args.has("--slave");
+const buildExtension = args.has("--extension");
 
 // Si no se especifica ningún bot, compilar todos
 const buildAll = !buildFarm && !buildImage && !buildLauncher && !buildGuard && !buildSlave;
@@ -91,15 +93,24 @@ const common = {
 (async () => {
   // Definir todos los bots disponibles
   const allBots = [
-    { in: "src/entries/farm.js",     out: "Auto-Farm.js",     flag: buildFarm },
-    { in: "src/entries/image.js",    out: "Auto-Image.js",    flag: buildImage },
-    { in: "src/entries/launcher.js", out: "Auto-Launcher.js", flag: buildLauncher },
-    { in: "src/entries/guard.js",    out: "Auto-Guard.js",    flag: buildGuard },
-    { in: "src/entries/slave.js",    out: "Auto-Slave.js",    flag: buildSlave }
+    { in: "src/entries/farm.js",     out: "Auto-Farm.js",     extOut: "farm.js",     flag: buildFarm },
+    { in: "src/entries/image.js",    out: "Auto-Image.js",    extOut: "image.js",    flag: buildImage },
+    { in: "src/entries/launcher.js", out: "Auto-Launcher.js", extOut: "launcher.js", flag: buildLauncher },
+    { in: "src/entries/guard.js",    out: "Auto-Guard.js",    extOut: "guard.js",    flag: buildGuard },
+    { in: "src/entries/slave.js",    out: "Auto-Slave.js",    extOut: "slave.js",    flag: buildSlave }
   ];
 
   // Filtrar qué bots compilar
-  const botsToCompile = buildAll ? allBots : allBots.filter(bot => bot.flag);
+  // Determine output directory (extension or root)
+  const outDir = buildExtension ? "extension/bots/" : "";
+
+  // Map bots with output paths (use extension names if building for extension)
+  const botsWithPaths = allBots.map(bot => ({
+    ...bot,
+    out: outDir + (buildExtension ? bot.extOut : bot.out)
+  }));
+
+  const botsToCompile = buildAll ? botsWithPaths : botsWithPaths.filter(bot => bot.flag);
   
   if (botsToCompile.length === 0) {
     console.log("❌ No se especificó ningún bot válido para compilar.");
@@ -107,7 +118,7 @@ const common = {
     process.exit(1);
   }
 
-  console.log(`🚀 Compilando: ${botsToCompile.map(bot => bot.out).join(', ')}`);
+  console.log(`🚀 Compilando: ${botsToCompile.map(bot => bot.out).join(', ')}${buildExtension ? ' → extension/bots/' : ''}`);
 
   const jobs = botsToCompile.map(({ in: entry, out: outfile }) => {
     const buildOptions = {
@@ -133,5 +144,5 @@ const common = {
   await Promise.all(jobs);
   
   const compiledFiles = botsToCompile.map(bot => bot.out).join(', ');
-  console.log(`✨ Build ${dev ? "DEV" : "PROD"} listo. Archivos compilados: ${compiledFiles}`);
+  console.log(`✨ Build ${dev ? "DEV" : "PROD"} listo.${buildExtension ? ' Extension en extension/bots/' : ''} Archivos compilados: ${compiledFiles}`);
 })();

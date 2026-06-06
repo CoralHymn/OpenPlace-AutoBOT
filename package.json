@@ -5,7 +5,10 @@
   "scripts": {
     "build": "node build.mjs",
     "build:dev": "node build.mjs --dev",
+    "build:ext": "node build.mjs --extension",
+    "build:ext:dev": "node build.mjs --extension --dev",
     "watch": "node build.mjs --watch",
+    "watch:ext": "node build.mjs --extension --watch",
     "lint": "eslint \"src/**/*.{js,jsx}\""
   },
   "devDependencies": {
