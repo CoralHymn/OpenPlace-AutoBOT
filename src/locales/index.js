@@ -32,7 +32,7 @@ const translations = {
 };
 
 // Estado del idioma actual
-let currentLanguage = 'es';
+let currentLanguage = 'zhHans';
 let currentTranslations = translations[currentLanguage];
 
 /**
@@ -40,18 +40,31 @@ let currentTranslations = translations[currentLanguage];
  * @returns {string} Código del idioma detectado
  */
 export function detectBrowserLanguage() {
-  const browserLang = window.navigator.language || window.navigator.userLanguage || 'es';
+  const browserLang = window.navigator.language || window.navigator.userLanguage || 'zh-CN';
 
-  // Extraer solo el código del idioma (ej: 'es-ES' -> 'es', 'pt-BR' -> 'pt')
+  // 完整匹配优先 (zh-Hans, zh-Hant, pt-BR 等)
+  if (translations[browserLang]) {
+    return browserLang;
+  }
+
+  // 截取主语言代码 (zh-TW -> zh, en-US -> en)
   const langCode = browserLang.split('-')[0].toLowerCase();
 
-  // Verificar si tenemos soporte para este idioma
+  // zh 映射到 zhHans / zhHant
+  if (langCode === 'zh') {
+    const lower = browserLang.toLowerCase();
+    if (lower.indexOf('hant') !== -1 || lower.indexOf('tw') !== -1 || lower.indexOf('hk') !== -1) {
+      return 'zhHant';
+    }
+    return 'zhHans';
+  }
+
   if (translations[langCode]) {
     return langCode;
   }
 
-  // Fallback a español por defecto
-  return 'es';
+  // Fallback a 简体中文
+  return 'zhHans';
 }
 
 /**
@@ -104,21 +117,8 @@ function setGlobalLanguage(langCode) {
  * @returns {string} Código del idioma inicializado
  */
 export function initializeLanguage() {
-  // Prioridad: global > guardado > navegador > español
-  const globalLang = getGlobalLanguage();
-  const savedLang = getSavedLanguage();
-  const browserLang = detectBrowserLanguage();
-
-  let selectedLang = 'es'; // fallback por defecto a español
-
-  if (globalLang && translations[globalLang]) {
-    selectedLang = globalLang;
-  } else if (savedLang && translations[savedLang]) {
-    selectedLang = savedLang;
-  } else if (browserLang && translations[browserLang]) {
-    selectedLang = browserLang;
-  }
-
+  // 强制使用简体中文
+  var selectedLang = 'zhHans';
   setLanguage(selectedLang);
   return selectedLang;
 }
