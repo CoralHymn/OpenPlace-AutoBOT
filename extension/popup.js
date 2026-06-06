@@ -1,10 +1,9 @@
 /* global chrome */
-// popup.js - WPlace AutoBOT Popup Controller
+// popup.js - WPlace AutoBOT
 
 document.addEventListener("DOMContentLoaded", function () {
   var statusEl = document.getElementById("status");
   var botList = document.getElementById("botList");
-
   if (!statusEl || !botList) return;
 
   var executingBot = null;
@@ -15,22 +14,20 @@ document.addEventListener("DOMContentLoaded", function () {
     if (type) statusEl.classList.add(type);
   }
 
-  // Check current page
+  // 检测当前页面
   chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     if (chrome.runtime.lastError || !tabs[0]) {
-      setStatus("Error getting active tab", "error");
+      setStatus("获取标签页出错", "error");
       disableAll();
       return;
     }
-
     var tab = tabs[0];
     if (!tab.url || tab.url.indexOf("wp.1515810.xyz") === -1) {
-      setStatus("Visit wp.1515810.xyz to use AutoBOT", "warning");
+      setStatus("请访问 wp.1515810.xyz 使用 AutoBOT", "warning");
       disableAll();
       return;
     }
-
-    setStatus("Ready \u2014 select a bot to run");
+    setStatus("就绪 \u2014 选择一个 Bot 启动");
   });
 
   function disableAll() {
@@ -45,7 +42,7 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Handle Run button clicks
+  // 点击启动按钮
   botList.addEventListener("click", function (e) {
     var runBtn = e.target.closest("[data-action='run']");
     if (!runBtn || runBtn.disabled) return;
@@ -54,21 +51,19 @@ document.addEventListener("DOMContentLoaded", function () {
     var botName = card ? card.dataset.bot : null;
     if (!botName) return;
 
-    // Prevent double-click
     if (executingBot) return;
     executingBot = botName;
 
-    // Visual feedback
     runBtn.textContent = "\u23f3";
     runBtn.classList.add("loading");
     card.classList.add("running");
-    setStatus("Launching " + botName + "...", "info");
+    setStatus("正在启动 " + botName + "...", "info");
 
     chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
       var tab = tabs[0];
       if (!tab || tab.url.indexOf("wp.1515810.xyz") === -1) {
-        setStatus("Must be on wp.1515810.xyz", "error");
-        runBtn.textContent = "\u25b6 Run";
+        setStatus("请在 wp.1515810.xyz 上运行", "error");
+        runBtn.textContent = "\u25b6 启动";
         runBtn.classList.remove("loading");
         card.classList.remove("running");
         executingBot = null;
@@ -81,21 +76,21 @@ document.addEventListener("DOMContentLoaded", function () {
         tabId: tab.id
       }, function (response) {
         if (response && response.success) {
-          setStatus(botName + " launched successfully", "success");
+          setStatus(botName + " 启动成功", "success");
           runBtn.textContent = "\u2713";
           runBtn.style.background = "rgba(76,175,80,0.3)";
           runBtn.style.borderColor = "#4CAF50";
           setTimeout(function () { window.close(); }, 1500);
         } else {
-          var errMsg = (response && response.error) || "Unknown error";
-          setStatus("Error: " + errMsg, "error");
-          runBtn.textContent = "\u25b6 Retry";
+          var errMsg = (response && response.error) || "未知错误";
+          setStatus("错误: " + errMsg, "error");
+          runBtn.textContent = "\u25b6 重试";
           runBtn.classList.remove("loading");
           card.classList.remove("running");
           card.classList.add("error");
           setTimeout(function () {
             card.classList.remove("error");
-            runBtn.textContent = "\u25b6 Run";
+            runBtn.textContent = "\u25b6 启动";
             executingBot = null;
           }, 3000);
         }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,7 +9,7 @@
     body {
       width: 360px;
       min-height: 520px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
       background: linear-gradient(160deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
       color: #e0e0e0;
       display: flex;
@@ -70,12 +70,9 @@
     }
 
     .bot-icon {
-      width: 44px;
-      height: 44px;
+      width: 44px; height: 44px;
       border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
       font-size: 24px;
       flex-shrink: 0;
       line-height: 1;
@@ -86,22 +83,14 @@
     .bot-icon.launcher { background: rgba(255,152,0,0.18); }
     .bot-icon.slave  { background: rgba(0,188,212,0.18); }
 
-    .bot-info {
-      flex: 1;
-      min-width: 0;
-    }
+    .bot-info { flex: 1; min-width: 0; }
     .bot-info .name {
-      font-size: 14px;
-      font-weight: 600;
-      color: #fff;
+      font-size: 14px; font-weight: 600; color: #fff;
       margin-bottom: 3px;
     }
     .bot-info .desc {
-      font-size: 11px;
-      color: rgba(255,255,255,0.4);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      font-size: 11px; color: rgba(255,255,255,0.4);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
     .bot-run {
@@ -110,23 +99,18 @@
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.06);
       color: #fff;
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 12px; font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
       white-space: nowrap;
       flex-shrink: 0;
-      letter-spacing: 0.3px;
     }
     .bot-run:hover {
       background: rgba(255,255,255,0.15);
       border-color: rgba(255,255,255,0.35);
     }
     .bot-run:active { transform: scale(0.95); }
-    .bot-run.loading {
-      opacity: 0.5;
-      pointer-events: none;
-    }
+    .bot-run.loading { opacity: 0.5; pointer-events: none; }
 
     .footer {
       padding: 12px 18px 16px;
@@ -135,10 +119,8 @@
       flex-shrink: 0;
     }
     .status {
-      font-size: 11px;
-      color: rgba(255,255,255,0.45);
-      min-height: 18px;
-      line-height: 18px;
+      font-size: 11px; color: rgba(255,255,255,0.45);
+      min-height: 18px; line-height: 18px;
       transition: color 0.3s ease;
     }
     .status.success { color: #4CAF50; }
@@ -151,7 +133,7 @@
   <div class="header">
     <div class="logo">&#x1f916;</div>
     <h1>WPlace AutoBOT</h1>
-    <p class="subtitle">Automation toolkit for wp.1515810.xyz</p>
+    <p class="subtitle">wp.1515810.xyz 自动化工具包</p>
   </div>
 
   <div class="bot-list" id="botList">
@@ -159,50 +141,50 @@
       <div class="bot-icon farm">&#x1f33e;</div>
       <div class="bot-info">
         <div class="name">Auto-Farm</div>
-        <div class="desc">Automatic pixel farming</div>
+        <div class="desc">自动像素耕种</div>
       </div>
-      <button class="bot-run" data-action="run">&#x25b6; Run</button>
+      <button class="bot-run" data-action="run">&#x25b6; 启动</button>
     </div>
 
     <div class="bot-card" data-bot="guard">
       <div class="bot-icon guard">&#x1f6e1;</div>
       <div class="bot-info">
         <div class="name">Auto-Guard</div>
-        <div class="desc">Protect &amp; repair artwork</div>
+        <div class="desc">保护并修复像素画</div>
       </div>
-      <button class="bot-run" data-action="run">&#x25b6; Run</button>
+      <button class="bot-run" data-action="run">&#x25b6; 启动</button>
     </div>
 
     <div class="bot-card" data-bot="image">
       <div class="bot-icon image">&#x1f5bc;</div>
       <div class="bot-info">
         <div class="name">Auto-Image</div>
-        <div class="desc">Draw pixel art from images</div>
+        <div class="desc">根据图片自动绘制</div>
       </div>
-      <button class="bot-run" data-action="run">&#x25b6; Run</button>
+      <button class="bot-run" data-action="run">&#x25b6; 启动</button>
     </div>
 
     <div class="bot-card" data-bot="launcher">
       <div class="bot-icon launcher">&#x1f680;</div>
       <div class="bot-info">
         <div class="name">Auto-Launcher</div>
-        <div class="desc">Bot mode selector</div>
+        <div class="desc">Bot 模式选择器</div>
       </div>
-      <button class="bot-run" data-action="run">&#x25b6; Run</button>
+      <button class="bot-run" data-action="run">&#x25b6; 启动</button>
     </div>
 
     <div class="bot-card" data-bot="slave">
       <div class="bot-icon slave">&#x1f91d;</div>
       <div class="bot-info">
         <div class="name">Auto-Slave</div>
-        <div class="desc">Coordinated painting</div>
+        <div class="desc">分布式协作绘制</div>
       </div>
-      <button class="bot-run" data-action="run">&#x25b6; Run</button>
+      <button class="bot-run" data-action="run">&#x25b6; 启动</button>
     </div>
   </div>
 
   <div class="footer">
-    <div class="status" id="status">Ready</div>
+    <div class="status" id="status">就绪</div>
   </div>
 
   <script src="popup.js"></script>
