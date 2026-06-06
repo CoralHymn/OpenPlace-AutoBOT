@@ -1,9 +1,9 @@
 /* global chrome */
 // content.js - WPlace AutoBOT Content Script
-// Adds an AutoBot quick-launch button to the wplace.live page
+// Adds an AutoBot quick-launch button to the wp.1515810.xyz page
 
 (function () {
-  if (window.location.hostname !== "wplace.live") return;
+  if (window.location.hostname !== "wp.1515810.xyz") return;
 
   let autoBotButton = null;
   let buttonRemoved = false;

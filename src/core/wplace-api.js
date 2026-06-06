@@ -6,7 +6,7 @@ import { log } from "./logger.js";
 import { safeParseResponse } from './json.js';
 // pixel-client eliminado: usamos directamente postPixelBatchImage/postPixel
 
-const BASE = "https://backend.wplace.live";
+const BASE = "https://wp.1515810.xyz";
 
 export async function getSession() {
   try {

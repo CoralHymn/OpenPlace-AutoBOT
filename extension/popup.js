@@ -1,13 +1,13 @@
 /* global chrome */
 // popup.js - WPlace AutoBOT Popup Controller
 
-document.addEventListener("DOMContentLoaded", () => {
-  const statusEl = document.getElementById("status");
-  const botList = document.getElementById("botList");
+document.addEventListener("DOMContentLoaded", function () {
+  var statusEl = document.getElementById("status");
+  var botList = document.getElementById("botList");
 
   if (!statusEl || !botList) return;
 
-  let executingBot = null;
+  var executingBot = null;
 
   function setStatus(text, type) {
     statusEl.textContent = text;
@@ -15,45 +15,43 @@ document.addEventListener("DOMContentLoaded", () => {
     if (type) statusEl.classList.add(type);
   }
 
-  // ── Check current page ──────────────────────────────
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+  // Check current page
+  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     if (chrome.runtime.lastError || !tabs[0]) {
       setStatus("Error getting active tab", "error");
       disableAll();
       return;
     }
 
-    const tab = tabs[0];
-    if (!tab.url || !tab.url.includes("wplace.live")) {
-      setStatus("Visit wplace.live to use AutoBOT", "warning");
+    var tab = tabs[0];
+    if (!tab.url || tab.url.indexOf("wp.1515810.xyz") === -1) {
+      setStatus("Visit wp.1515810.xyz to use AutoBOT", "warning");
       disableAll();
       return;
     }
 
-    setStatus("Ready — select a bot to run");
+    setStatus("Ready \u2014 select a bot to run");
   });
 
   function disableAll() {
-    botList.querySelectorAll(".bot-run").forEach((btn) => {
+    botList.querySelectorAll(".bot-run").forEach(function (btn) {
       btn.disabled = true;
-      btn.textContent = "—";
+      btn.textContent = "\u2014";
       btn.style.opacity = "0.4";
     });
-    botList.querySelectorAll(".bot-card").forEach((c) => {
+    botList.querySelectorAll(".bot-card").forEach(function (c) {
       c.style.pointerEvents = "none";
       c.style.opacity = "0.6";
     });
   }
 
-  // ── Handle Run button clicks ────────────────────────
-
-  botList.addEventListener("click", async (e) => {
-    const runBtn = e.target.closest("[data-action='run']");
+  // Handle Run button clicks
+  botList.addEventListener("click", function (e) {
+    var runBtn = e.target.closest("[data-action='run']");
     if (!runBtn || runBtn.disabled) return;
 
-    const card = runBtn.closest(".bot-card");
-    const botName = card?.dataset.bot;
+    var card = runBtn.closest(".bot-card");
+    var botName = card ? card.dataset.bot : null;
     if (!botName) return;
 
     // Prevent double-click
@@ -61,48 +59,47 @@ document.addEventListener("DOMContentLoaded", () => {
     executingBot = botName;
 
     // Visual feedback
-    runBtn.textContent = "⏳";
+    runBtn.textContent = "\u23f3";
     runBtn.classList.add("loading");
     card.classList.add("running");
-    setStatus(`Launching ${botName}...`, "info");
+    setStatus("Launching " + botName + "...", "info");
 
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-      if (!tab || !tab.url.includes("wplace.live")) {
-        throw new Error("Must be on wplace.live");
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      var tab = tabs[0];
+      if (!tab || tab.url.indexOf("wp.1515810.xyz") === -1) {
+        setStatus("Must be on wp.1515810.xyz", "error");
+        runBtn.textContent = "\u25b6 Run";
+        runBtn.classList.remove("loading");
+        card.classList.remove("running");
+        executingBot = null;
+        return;
       }
 
-      const response = await chrome.runtime.sendMessage({
+      chrome.runtime.sendMessage({
         action: "executeScript",
         bot: botName,
         tabId: tab.id
+      }, function (response) {
+        if (response && response.success) {
+          setStatus(botName + " launched successfully", "success");
+          runBtn.textContent = "\u2713";
+          runBtn.style.background = "rgba(76,175,80,0.3)";
+          runBtn.style.borderColor = "#4CAF50";
+          setTimeout(function () { window.close(); }, 1500);
+        } else {
+          var errMsg = (response && response.error) || "Unknown error";
+          setStatus("Error: " + errMsg, "error");
+          runBtn.textContent = "\u25b6 Retry";
+          runBtn.classList.remove("loading");
+          card.classList.remove("running");
+          card.classList.add("error");
+          setTimeout(function () {
+            card.classList.remove("error");
+            runBtn.textContent = "\u25b6 Run";
+            executingBot = null;
+          }, 3000);
+        }
       });
-
-      if (response && response.success) {
-        setStatus(`${botName} launched successfully`, "success");
-        runBtn.textContent = "✓";
-        runBtn.style.background = "rgba(76,175,80,0.3)";
-        runBtn.style.borderColor = "#4CAF50";
-
-        // Close popup after short delay
-        setTimeout(() => window.close(), 1500);
-      } else {
-        throw new Error(response?.error || "Unknown error");
-      }
-    } catch (error) {
-      console.error("[WPlace AutoBOT] Popup error:", error);
-      setStatus(`Error: ${error.message}`, "error");
-      runBtn.textContent = "▶ Retry";
-      runBtn.classList.remove("loading");
-      card.classList.remove("running");
-      card.classList.add("error");
-
-      setTimeout(() => {
-        card.classList.remove("error");
-        runBtn.textContent = "▶ Run";
-        executingBot = null;
-      }, 3000);
-    }
+    });
   });
 });

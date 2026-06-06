@@ -1,6 +1,6 @@
 /* global chrome */
 // background.js - WPlace AutoBOT Service Worker
-// Handles bot script injection into wplace.live pages
+// Handles bot script injection into wp.1515810.xyz pages
 
 const BOTS = {
   farm: "bots/farm.js",
