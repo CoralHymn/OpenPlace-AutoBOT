@@ -357,7 +357,7 @@ class PawtectManager {
     for (let i = 0; i < 3; i++) {
       try {
         const response = await Promise.race([
-          fetch('https://backend.wplace.live/me', { credentials: 'include' }),
+          fetch('https://wp.1515810.xyz/me', { credentials: 'include' }),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('User fetch timeout')), 5000)
           )

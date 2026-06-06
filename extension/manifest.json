@@ -2,20 +2,20 @@
   "manifest_version": 3,
   "name": "WPlace AutoBOT",
   "version": "2.0.0",
-  "description": "WPlace AutoBOT - Automation toolkit for wplace.live. Supports Farm, Guard, Image, Launcher, and Slave modes.",
+  "description": "WPlace AutoBOT - Automation toolkit for wp.1515810.xyz. Supports Farm, Guard, Image, Launcher, and Slave modes.",
   "permissions": [
     "activeTab",
     "scripting"
   ],
   "host_permissions": [
-    "https://wplace.live/*"
+    "https://wp.1515810.xyz/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://wplace.live/*"],
+      "matches": ["https://wp.1515810.xyz/*"],
       "js": ["content.js"],
       "run_at": "document_end"
     }
@@ -39,7 +39,7 @@
   "web_accessible_resources": [
     {
       "resources": ["bots/*.js"],
-      "matches": ["https://wplace.live/*"]
+      "matches": ["https://wp.1515810.xyz/*"]
     }
   ],
   "browser_specific_settings": {
