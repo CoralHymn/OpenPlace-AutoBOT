@@ -189,27 +189,25 @@ export async function runLauncher() {
       }
     });
     
-    // Crear selector de idioma después de la UI
-    languageSelector = createLanguageSelector({
-      position: 'top-left', // Esquina opuesta al launcher
-      showFlags: true,
-      onLanguageChange: (newLanguage) => {
-        log(`🌍 Idioma cambiado a: ${newLanguage} desde el launcher`);
+    // 语言选择器已禁用 — 仅支持简体中文
+    // languageSelector = createLanguageSelector({
+    //   position: 'top-left',
+    //   showFlags: true,
+    //   onLanguageChange: (newLanguage) => {
+    //     log(`🌍 Idioma cambiado a: ${newLanguage} desde el launcher`);
         
-        // Actualizar textos de la UI del launcher
-        ui.updateTexts();
+    //     // Actualizar textos de la UI del launcher
+    //     ui.updateTexts();
         
-        // Emitir evento personalizado para notificar a otros módulos
-        if (typeof window !== 'undefined' && window.CustomEvent) {
-          window.dispatchEvent(new window.CustomEvent('launcherLanguageChanged', {
-            detail: { language: newLanguage }
-          }));
-        }
-      }
-    });
-    
-    // Montar el selector
-    languageSelector.mount();
+    //     // Emitir evento personalizado para notificar a otros módulos
+    //     if (typeof window !== 'undefined' && window.CustomEvent) {
+    //       window.dispatchEvent(new window.CustomEvent('launcherLanguageChanged', {
+    //         detail: { language: newLanguage }
+    //       }));
+    //     }
+    //   }
+    // });
+    // languageSelector.mount();
     
     // Cargar información inicial
     log('📊 Cargando información inicial...');
