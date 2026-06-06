@@ -3,11 +3,11 @@
 // Handles bot script injection into wp.1515810.xyz pages
 
 const BOTS = {
-  farm: "bots/farm.js",
-  guard: "bots/guard.js",
-  image: "bots/image.js",
-  launcher: "bots/launcher.js",
-  slave: "bots/slave.js"
+  farm: "extension/bots/farm.js",
+  guard: "extension/bots/guard.js",
+  image: "extension/bots/image.js",
+  launcher: "extension/bots/launcher.js",
+  slave: "extension/bots/slave.js"
 };
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

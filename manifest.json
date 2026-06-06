@@ -11,34 +11,34 @@
     "https://wp.1515810.xyz/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "extension/background.js"
   },
   "content_scripts": [
     {
       "matches": ["https://wp.1515810.xyz/*"],
-      "js": ["content.js"],
+      "js": ["extension/content.js"],
       "run_at": "document_end"
     }
   ],
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "extension/popup.html",
     "default_title": "WPlace AutoBOT",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "extension/icons/icon16.png",
+      "32": "extension/icons/icon32.png",
+      "48": "extension/icons/icon48.png",
+      "128": "extension/icons/icon128.png"
     }
   },
   "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "extension/icons/icon16.png",
+    "32": "extension/icons/icon32.png",
+    "48": "extension/icons/icon48.png",
+    "128": "extension/icons/icon128.png"
   },
   "web_accessible_resources": [
     {
-      "resources": ["bots/*.js"],
+      "resources": ["extension/bots/*.js"],
       "matches": ["https://wp.1515810.xyz/*"]
     }
   ],
