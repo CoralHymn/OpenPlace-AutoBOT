@@ -2,6 +2,7 @@ import { fetchWithTimeout } from "./http.js";
 import { ensureToken, invalidateToken, getPawtectToken, getFingerprint, waitForPawtect } from "./turnstile.js";
 import { ensureFingerprint } from './fingerprint.js';
 import { computePawtect } from './pawtect.js';
+let _pawtectWasmUnavailable = false;
 import { log } from "./logger.js";
 import { safeParseResponse } from './json.js';
 // pixel-client eliminado: usamos directamente postPixelBatchImage/postPixel
@@ -369,13 +370,18 @@ export async function postPixelBatchImage(tileX, tileY, coords, colors, turnstil
   // Fingerprint proactivo si falta
   let fp = getFingerprint();
   if (!fp) { try { fp = await ensureFingerprint({}); } catch {} }
-  // Siempre intentar cálculo dinámico (override) para evitar mismatch aleatorio
-  let pawtect = null;
-  try {
-    const preview = { colors, coords, t: turnstileToken || 'seed', ...(fp ? { fp } : { fp: 'seed' }) };
-    const dyn = await computePawtect(preview);
-    if (dyn) pawtect = dyn; else pawtect = getPawtectToken();
-  } catch { pawtect = getPawtectToken(); }
+  // Saltar pawtect si WASM no disponible
+  let pawtect = getPawtectToken();
+  if (!_pawtectWasmUnavailable) {
+    try {
+      const preview = { colors, coords, t: turnstileToken || "seed", ...(fp ? { fp } : { fp: "seed" }) };
+      const dyn = await computePawtect(preview);
+      if (dyn) pawtect = dyn;
+    } catch {
+      _pawtectWasmUnavailable = true;
+      log("[API] pawtect WASM no disponible, omitiendo");
+    }
+  }
   if (!fp) { try { await waitForPawtect(1200); } catch {} fp = getFingerprint(); }
     // Prepare exact body format as used in example
   const body = JSON.stringify({ 

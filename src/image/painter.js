@@ -298,14 +298,15 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
       log(`🔍 Estado del primer lote - isFirstBatch: ${imageState.isFirstBatch}, useAllChargesFirst: ${imageState.useAllChargesFirst}, availableCharges: ${availableCharges}`);
       
       if (imageState.isFirstBatch && imageState.useAllChargesFirst && availableCharges > 0) {
-        // Primera pasada: usar todas las cargas disponibles
-        pixelsPerBatch = Math.min(availableCharges, imageState.remainingPixels.length);
-        imageState.isFirstBatch = false; // Marcar que ya no es la primera pasada
-        log(`🚀 Primera pasada: usando ${pixelsPerBatch} cargas de ${availableCharges} disponibles`);
+        // Primera pasada: usar todas las cargas disponibles (con limite de seguridad)
+        const MAX_BATCH = 10000;
+        pixelsPerBatch = Math.min(availableCharges, imageState.remainingPixels.length, MAX_BATCH);
+        imageState.isFirstBatch = false;
+        log(`🚀 Primera pasada: usando ${pixelsPerBatch} pixeles de ${availableCharges} cargas (cap: ${MAX_BATCH})`);
       } else {
-        // Pasadas siguientes: usar configuración normal
-        pixelsPerBatch = Math.min(imageState.pixelsPerBatch, imageState.remainingPixels.length);
-        log(`⚙️ Pasada normal: usando ${pixelsPerBatch} píxeles (configurado: ${imageState.pixelsPerBatch})`);
+        // Pasadas siguientes
+        const MAX_BATCH = 10000;
+        pixelsPerBatch = Math.min(imageState.pixelsPerBatch, imageState.remainingPixels.length, MAX_BATCH);
       }
       
       // Usar la nueva función de verificación de cargas
@@ -345,69 +346,108 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
       const result = await paintPixelBatchWithRetry(batch, onProgress);
       
       if (result.success && result.painted > 0) {
-        // Sumar píxeles realmente pintados + píxeles omitidos por verificación inteligente
-        imageState.paintedPixels += result.painted + skippedCount;
-        
+        // Sumar píxeles realmente pintados + píxeles omitidos por verificación inteligente + ya correctos
+        imageState.paintedPixels += result.painted + skippedCount + (result.alreadyCorrect || 0);
+
         // Reportar métricas del lote actual
         try {
           const metadata = {
-            details: `Lote pintado: ${result.painted + skippedCount}/${batch.length} px · patrón ${imageState.paintPattern} · restantes ${imageState.remainingPixels.length}`,
+            details: `Lote pintado: ${result.painted + skippedCount + (result.alreadyCorrect || 0)}/${batch.length} px · patrón ${imageState.paintPattern} · restantes ${imageState.remainingPixels.length}`,
             batch_size: batch.length,
             painted_count: result.painted,
             skipped_count: skippedCount,
+            already_correct: result.alreadyCorrect || 0,
             pattern: imageState.paintPattern,
             remaining_pixels: imageState.remainingPixels.length,
             tile: { x: imageState.tileX, y: imageState.tileY }
           };
-          pixelsPainted(result.painted + skippedCount, { botVariant: 'auto-image', metadata });
+          pixelsPainted(result.painted + skippedCount + (result.alreadyCorrect || 0), { botVariant: 'auto-image', metadata });
         } catch (e) {
           log('⚠️ Error reportando métricas:', e);
         }
 
-        
-  // Actualizar cargas consumidas (una sola vez)
-  imageState.currentCharges = Math.max(0, imageState.currentCharges - result.painted);
-  log(`Cargas después del lote: ${imageState.currentCharges.toFixed(1)} (consumidas: ${result.painted})`);
-        
+        // Actualizar cargas consumidas (una sola vez)
+        imageState.currentCharges = Math.max(0, imageState.currentCharges - result.painted);
+        log(`Cargas después del lote: ${imageState.currentCharges.toFixed(1)} (consumidas: ${result.painted})`);
+
         // Actualizar posición para continuar desde aquí si se interrumpe
         if (batch.length > 0) {
           const lastPixel = batch[batch.length - 1];
           imageState.lastPosition = { x: lastPixel.imageX, y: lastPixel.imageY };
         }
-        
-        log(`Lote exitoso: ${result.painted}/${batch.length} píxeles pintados. Total: ${imageState.paintedPixels}/${imageState.totalPixels}`);
-        
+
+        log(`Lote exitoso: ${result.painted}/${batch.length} píxeles pintados${result.alreadyCorrect ? ` + ${result.alreadyCorrect} ya correctos` : ''}. Total: ${imageState.paintedPixels}/${imageState.totalPixels}`);
+
         // Calcular tiempo estimado
         const estimatedTime = calculateEstimatedTime();
-        
+
         // Mostrar mensaje de confirmación de pasada completada
         const progressPercent = ((imageState.paintedPixels / imageState.totalPixels) * 100).toFixed(1);
         const successMessage = t('image.passCompleted', {
-          painted: result.painted,
+          painted: result.painted + (result.alreadyCorrect || 0),
           percent: progressPercent,
           current: imageState.paintedPixels,
           total: imageState.totalPixels
         });
-        
+
         // Actualizar progreso con mensaje de éxito
         if (onProgress) {
           onProgress(imageState.paintedPixels, imageState.totalPixels, successMessage, estimatedTime);
         }
-        
-  // Pausa para que el usuario vea el mensaje de éxito antes del cooldown
-        await sleep(2000);
+
+        // Pausa para que el usuario vea el mensaje de éxito antes del cooldown
+        await sleep(100);
+
+        // Incluso con éxito parcial, re-enqueue píxeles fallidos si los hay (multi-tile)
+        if (!result.success && result.failedPixels && result.failedPixels.length > 0) {
+          log(`🔄 Re-enqueuing ${result.failedPixels.length} píxeles fallidos de otros tiles`);
+          for (let i = result.failedPixels.length - 1; i >= 0; i--) {
+            imageState.remainingPixels.unshift(result.failedPixels[i]);
+          }
+        }
+      } else if (result.painted > 0 && !result.success && result.failedPixels && result.failedPixels.length > 0) {
+        // Éxito parcial multi-tile: algunos tiles pintados, otros no
+        imageState.paintedPixels += result.painted + (result.alreadyCorrect || 0);
+        imageState.currentCharges = Math.max(0, imageState.currentCharges - result.painted);
+
+        // Re-enqueue solo los píxeles fallidos
+        log(`🎯 Parcial: ${result.painted} píxeles pintados, ${result.alreadyCorrect || 0} ya correctos, re-enqueuing ${result.failedPixels.length} fallidos`);
+        for (let i = result.failedPixels.length - 1; i >= 0; i--) {
+          imageState.remainingPixels.unshift(result.failedPixels[i]);
+        }
+
+        if (onProgress) {
+          onProgress(imageState.paintedPixels, imageState.totalPixels,
+            `⚠️ Parcial: ${result.painted} pintados, ${result.failedPixels.length} pendientes`);
+        }
+        await sleep(100);
       } else if (result.shouldContinue) {
         // Si el sistema de reintentos falló pero debe continuar
-        log(`Lote falló después de todos los reintentos, continuando con siguiente lote...`);
+        // IMPORTANTE: re-enqueue los píxeles fallidos para no perderlos
+        if (result.failedPixels && result.failedPixels.length > 0) {
+          log(`⚠️ Lote falló tras reintentos: re-enqueuing ${result.failedPixels.length} píxeles fallidos + ${result.alreadyCorrect || 0} ya correctos`);
+          imageState.paintedPixels += (result.alreadyCorrect || 0);
+          for (let i = result.failedPixels.length - 1; i >= 0; i--) {
+            imageState.remainingPixels.unshift(result.failedPixels[i]);
+          }
+        } else if (result.alreadyCorrect > 0) {
+          // Todos ya correctos, sin fallos — contar como progreso
+          imageState.paintedPixels += result.alreadyCorrect;
+          log(`ℹ️ Todos ${result.alreadyCorrect} píxeles ya tenían el color correcto`);
+        } else {
+          log(`Lote falló después de todos los reintentos, continuando con siguiente lote...`);
+        }
       } else {
-        // En caso de fallo, devolver el lote a la cola
-        imageState.remainingPixels.unshift(...batch);
+        // En caso de fallo total, devolver el lote a la cola
+        for (let i = batch.length - 1; i >= 0; i--) {
+          imageState.remainingPixels.unshift(batch[i]);
+        }
         log(`Lote falló: reintentando en 5 segundos...`);
         await sleep(5000);
       }
       
   // Pausa breve entre lotes
-      await sleep(500);
+      await sleep(300);
     }
     
     if (imageState.stopFlag) {
@@ -450,83 +490,115 @@ export async function processImage(imageData, startPosition, onProgress, onCompl
 export async function paintPixelBatch(batch, providedToken = null) {
   try {
     if (!batch || batch.length === 0) {
-      return { success: false, painted: 0, error: 'Lote vacío' };
+      return { success: false, painted: 0, alreadyCorrect: 0, error: 'Lote vacío', failedPixels: [] };
     }
     
     // Agrupar el lote por tile como hace wplacer
-    const byTile = new Map(); // key: `${tx},${ty}` -> { coords: [], colors: [], tx: p.tileX, ty: p.tileY }
+    const byTile = new Map(); // key: `${tx},${ty}` -> { coords: [], colors: [], tx: p.tileX, ty: p.tileY, pixels: [] }
     for (const p of batch) {
       const key = `${p.tileX},${p.tileY}`;
-      if (!byTile.has(key)) byTile.set(key, { coords: [], colors: [], tx: p.tileX, ty: p.tileY });
+      if (!byTile.has(key)) byTile.set(key, { coords: [], colors: [], tx: p.tileX, ty: p.tileY, pixels: [] });
       const bucket = byTile.get(key);
       bucket.coords.push(p.localX, p.localY);
       bucket.colors.push(p.color.id || p.color.value || 1);
+      bucket.pixels.push(p); // guardar referencia para reintentos parciales
     }
 
   // Obtener un único token (reutilizar si se pasa desde nivel superior)
   const token = providedToken !== undefined ? providedToken : await ensureToken();
 
     let totalPainted = 0;
-    for (const { coords, colors, tx, ty } of byTile.values()) {
-      if (colors.length === 0) continue;
-      // Saneado extra de coords (0..999) y depuración de rangos
-      const sanitized = [];
-      for (let i = 0; i < coords.length; i += 2) {
-        const x = ((Number(coords[i]) % 1000) + 1000) % 1000;
-        const y = ((Number(coords[i + 1]) % 1000) + 1000) % 1000;
-        // Filtrar NaN/undefined
-        if (Number.isFinite(x) && Number.isFinite(y)) {
-          sanitized.push(x, y);
-        }
-      }
-      // Log de diagnóstico
-      try {
-        let minX = 999, maxX = 0, minY = 999, maxY = 0;
-        for (let i = 0; i < sanitized.length; i += 2) {
-          const x = sanitized[i], y = sanitized[i + 1];
-          if (x < minX) minX = x; if (x > maxX) maxX = x;
-          if (y < minY) minY = y; if (y > maxY) maxY = y;
-        }
-        log(`[IMG] Enviando tile ${tx},${ty}: ${colors.length} px | x:[${minX},${maxX}] y:[${minY},${maxY}]`);
-      } catch {
-        // noop (solo diagnóstico)
-      }
+    let totalAlreadyCorrect = 0; // píxeles que ya tenían el color correcto
+    let allSucceeded = true;
+    const failedPixels = []; // píxeles que fallaron para re-enqueue
+    let firstErrorStatus = null;
+    let firstErrorMsg = null;
 
-      const resp = await postPixelBatchImage(tx, ty, sanitized, colors, token);
-      if (resp.status !== 200) {
-        return {
-          success: false,
-          painted: totalPainted,
-          error: resp.json?.message || `HTTP ${resp.status}`,
-          status: resp.status
-        };
-      }
+    for (const { coords, colors, tx, ty, pixels: tilePixels } of byTile.values()) {
+      if (colors.length === 0) continue;
       
-      // Verificar que realmente se pintaron píxeles
-      const actualPainted = resp.painted || 0;
-      if (actualPainted === 0 && colors.length > 0) {
-        log(`⚠️ API devolvió 200 OK pero painted=0 para ${colors.length} píxeles en tile ${tx},${ty}`);
-        // Considerar esto como un fallo parcial para activar reintentos
-        return {
-          success: false,
-          painted: totalPainted,
-          error: `API devolvió painted=0 para ${colors.length} píxeles`,
-          status: 200,
-          shouldRetry: true
-        };
+      // Dividir tiles grandes en chunks para evitar API timeouts y stack overflow
+      const MAX_CHUNK = 3000;
+      for (let chunkStart = 0; chunkStart < colors.length; chunkStart += MAX_CHUNK) {
+        const chunkEnd = Math.min(chunkStart + MAX_CHUNK, colors.length);
+        const chunkCoords = coords.slice(chunkStart * 2, chunkEnd * 2);
+        const chunkColors = colors.slice(chunkStart, chunkEnd);
+        const chunkPixels = tilePixels.slice(chunkStart, chunkEnd);
+
+        // Saneado extra de coords (0..999)
+        const sanitized = [];
+        for (let i = 0; i < chunkCoords.length; i += 2) {
+          const x = ((Number(chunkCoords[i]) % 1000) + 1000) % 1000;
+          const y = ((Number(chunkCoords[i + 1]) % 1000) + 1000) % 1000;
+          if (Number.isFinite(x) && Number.isFinite(y)) {
+            sanitized.push(x, y);
+          }
+        }
+        
+        try {
+          let minX = 999, maxX = 0, minY = 999, maxY = 0;
+          for (let i = 0; i < sanitized.length; i += 2) {
+            const x = sanitized[i], y = sanitized[i + 1];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+          }
+          log(`[IMG] Enviando tile ${tx},${ty} chunk ${chunkStart}-${chunkEnd}: ${chunkColors.length} px | x:[${minX},${maxX}] y:[${minY},${maxY}]`);
+        } catch { /* noop */ }
+
+        const resp = await postPixelBatchImage(tx, ty, sanitized, chunkColors, token);
+        
+        if (resp.status !== 200) {
+          log(`Tile ${tx},${ty} chunk ${chunkStart}-${chunkEnd} fallo (HTTP ${resp.status}): ${resp.json?.message || 'error desconocido'}. ${chunkPixels.length} pixeles seran re-enqueued.`);
+          allSucceeded = false;
+          if (!firstErrorStatus) {
+            firstErrorStatus = resp.status;
+            firstErrorMsg = resp.json?.message || `HTTP ${resp.status}`;
+          }
+          // Usar bucle en vez de spread para evitar stack overflow con arrays grandes
+          for (let fi = 0; fi < chunkPixels.length; fi++) {
+            failedPixels.push(chunkPixels[fi]);
+          }
+          continue;
+        }
+
+        const actualPainted = resp.painted || 0;
+        if (actualPainted === 0 && chunkColors.length > 0) {
+          log(`Tile ${tx},${ty} chunk ${chunkStart}-${chunkEnd}: ${chunkColors.length} pixeles ya correctos (painted=0), saltando`);
+          totalAlreadyCorrect += chunkColors.length;
+          continue;
+        }
+
+        totalPainted += actualPainted;
+        log(`Tile ${tx},${ty} chunk ${chunkStart}-${chunkEnd}: ${actualPainted}/${chunkColors.length} pixeles pintados`);
       }
-      
-      totalPainted += actualPainted;
-      log(`✅ Tile ${tx},${ty}: ${actualPainted}/${colors.length} píxeles pintados exitosamente`);
     }
 
-    return { success: true, painted: totalPainted };
+    if (!allSucceeded) {
+      log(`🎯 Multi-tile batch: ${totalPainted} píxeles pintados, ${failedPixels.length} píxeles fallidos serán re-enqueued`);
+    }
+
+    // Si no hubo tiles fallidos pero algunos ya estaban correctos, es éxito total
+    if (allSucceeded && failedPixels.length === 0 && totalAlreadyCorrect > 0) {
+      log(`🎯 Batch: ${totalPainted} pintados, ${totalAlreadyCorrect} ya correctos`);
+    }
+
+    return { 
+      success: allSucceeded, 
+      painted: totalPainted,
+      alreadyCorrect: totalAlreadyCorrect,
+      failedPixels,
+      error: allSucceeded ? undefined : firstErrorMsg,
+      status: allSucceeded ? undefined : firstErrorStatus,
+      shouldRetry: !allSucceeded && failedPixels.length > 0
+    };
   } catch (error) {
     log('Error en paintPixelBatch:', error);
     return {
       success: false,
       painted: 0,
-      error: error.message
+      alreadyCorrect: 0,
+      error: error.message,
+      failedPixels: batch.slice() // devolver todo el batch para re-enqueue
     };
   }
 }
@@ -538,8 +610,8 @@ const NETWORK_ERROR_LOG_THROTTLE = 60000; // 1 minuto entre logs de errores de r
 
 // Función de pintado con sistema de reintentos (adaptado del Auto-Farm)
 export async function paintPixelBatchWithRetry(batch, onProgress) {
-  const maxAttempts = 5; // 5 intentos como en el Farm
-  const baseDelay = 3000; // Delay base de 3 segundos
+  const maxAttempts = 3; // 5 intentos como en el Farm
+  const baseDelay = 1500; // Delay base de 3 segundos
   let token = null;
 
   // Obtener un token una sola vez antes de los reintentos
@@ -549,6 +621,10 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
     log('⚠️ No se pudo obtener token inicial, se intentará en el primer intento:', e.message);
   }
 
+  let currentBatch = batch; // batch que se va reduciendo en reintentos multi-tile
+  let accumulatedPainted = 0; // píxeles acumulados de intentos parciales exitosos
+  let accumulatedAlreadyCorrect = 0; // píxeles que ya estaban correctos
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       // Si no tenemos token todavía (fallo al inicio) intentar generarlo ahora
@@ -556,12 +632,24 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
         token = await ensureToken();
       }
 
-      const result = await paintPixelBatch(batch, token);
+      const result = await paintPixelBatch(currentBatch, token);
+
+      // Acumular pintados y ya-correctos de este intento
+      accumulatedPainted += result.painted || 0;
+      accumulatedAlreadyCorrect += result.alreadyCorrect || 0;
 
       if (result.success) {
-        imageState.retryCount = 0; // Reset en éxito
-        _consecutiveNetworkErrors = 0; // Reset contador de errores
-        return result;
+        imageState.retryCount = 0;
+        _consecutiveNetworkErrors = 0;
+        // Devolver el total acumulado
+        return { success: true, painted: accumulatedPainted, alreadyCorrect: accumulatedAlreadyCorrect, failedPixels: [] };
+      }
+
+      // Si hubo éxito parcial (algunos tiles OK, otros no), solo reintentar los fallidos
+      if (result.failedPixels && result.failedPixels.length > 0 && result.failedPixels.length < currentBatch.length) {
+        log(`🎯 Retry multi-tile: acumulado ${accumulatedPainted} px pintados + ${accumulatedAlreadyCorrect} ya correctos, reintentando solo ${result.failedPixels.length} píxeles fallidos`);
+        currentBatch = result.failedPixels; // reducir batch a solo los fallidos
+        // NO resetear accumulatedPainted, ya lo sumamos arriba
       }
 
       // Token inválido / expirado -> regenerar inmediatamente y repetir intento sin penalizar backoff completo
@@ -569,7 +657,6 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
         log('🔐 403 recibido: invalidando y regenerando token para reintento inmediato');
         try {
           token = await ensureToken(true); // forzar nuevo token
-          // Reintentar el mismo intento (no incrementar backoff extra)
           continue;
         } catch (regenErr) {
           log('❌ Falló regeneración de token tras 403:', regenErr.message);
@@ -589,13 +676,10 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
         if (isNetworkError) {
           _consecutiveNetworkErrors++;
           const now = Date.now();
-
-          // Solo loggear errores de red cada minuto o en el primer error
           if (now - _lastNetworkErrorLog > NETWORK_ERROR_LOG_THROTTLE || _consecutiveNetworkErrors === 1) {
             log(`🌐 Error de red (${_consecutiveNetworkErrors} consecutivos). Reintento ${attempt}/${maxAttempts} en ${delaySeconds}s`);
             _lastNetworkErrorLog = now;
           }
-
           errorMessage = t('image.networkError');
         } else if (result.status >= 500) {
           errorMessage = t('image.serverError');
@@ -613,7 +697,7 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
         }
 
         if (onProgress) {
-          onProgress(imageState.paintedPixels, imageState.totalPixels, errorMessage);
+          onProgress(imageState.paintedPixels + accumulatedPainted, imageState.totalPixels, errorMessage);
         }
 
         await sleep(delay);
@@ -667,9 +751,11 @@ export async function paintPixelBatchWithRetry(batch, onProgress) {
   // Retornar un resultado de fallo que permita continuar
   return {
     success: false,
-    painted: 0,
+    painted: accumulatedPainted, // incluir lo que sí se pintó en intentos parciales
+    alreadyCorrect: accumulatedAlreadyCorrect,
     error: `Falló después de ${maxAttempts} intentos`,
-    shouldContinue: true // Indica que debe continuar con el siguiente lote
+    failedPixels: currentBatch, // los píxeles que quedan sin pintar
+    shouldContinue: true
   };
 }
 
