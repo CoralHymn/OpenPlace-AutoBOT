@@ -38,7 +38,7 @@ export const zhHans = {
 
   // 绘图模块
   image: {
-    title: "WPlace Auto-Image",
+    title: "骷髅打金服 图片绘制",
     initBot: "初始化自动机器人",
     uploadImage: "上传图片",
     resizeImage: "调整图片大小",
