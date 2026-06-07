@@ -37,6 +37,8 @@ npm run build:ext:dev  # 开发构建（含 sourcemap）
 
 ```bash
 node pack-zip.mjs
+
+node pack-userscript.mjs
 ```
 
 会生成 `骷髅打金服-笨南瓜BOT.zip`，只含扩展所需文件，不含源码和开发依赖。
