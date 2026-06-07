@@ -13,7 +13,7 @@
 
 // Valores por defecto seguros para desarrollo local
 const DEFAULTS = Object.freeze({
-  ENABLED: true,                 // Habilitar/deshabilitar envío de métricas
+  ENABLED: false,                // 已禁用 — 无需遥测
   BASE_URL: 'https://metricswplaceapi.alarisco.xyz', // URL base del servidor de métricas
   API_KEY: 'wplace_2c8e4b2b1e0a4f7cb9d3a76f4a1c0b6f', // API Key por defecto para despliegue (puedes sobreescribir)
   PUBLIC_SALT: 'wplace_public_salt_2024', // Sal pública por defecto (alineada con docker-compose)
