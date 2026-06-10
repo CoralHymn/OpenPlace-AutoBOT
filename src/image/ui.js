@@ -1359,7 +1359,8 @@ export async function createImageUI({ texts, ...handlers }) {
   // Inicializar en estado inicial (todo oculto)
   hideAllControls();
   
-  return {
+
+    return {
     setStatus,
     updateProgress,
     updateCooldownDisplay,

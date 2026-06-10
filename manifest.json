@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "骷髅打金服-笨南瓜BOT",
-  "version": "2.0",
+  "version": "2.1",
   "description": "哦哦哦是骷髅打金服，不是WP玩不起，而是私服更有性价比！《骷髅打金服》—— 真私服，刀刀爆米，散人也能当大哥",
   "permissions": [
     "activeTab",

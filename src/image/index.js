@@ -123,13 +123,35 @@ export async function runImage() {
     async function initializeBot(isAutoInit = false) {
       log('🤖 Inicializando Auto-Image...');
       
-      // Verificar colores disponibles
+      // Verificar colores disponibles con reintentos automaticos
       ui.setStatus(t('image.checkingColors'), 'info');
-      const colors = detectAvailableColors();
+      let colors = detectAvailableColors();
       
       if (colors.length === 0) {
-        ui.setStatus(t('image.noColorsFound'), 'error');
-        return false;
+        ui.setStatus('🔍 调色板未打开，正在等待（每秒检查一次）...', 'warning');
+        log('🔍 Paleta no detectada, reintentando cada 1s...');
+        
+        // Polling: reintentar cada 1 segundo hasta encontrar colores
+        const maxWaitMs = 120000; // 2 minutos maximo
+        const startTime = Date.now();
+        while (colors.length === 0) {
+          await new Promise(r => setTimeout(r, 1000));
+          colors = detectAvailableColors();
+          
+          if (Date.now() - startTime > maxWaitMs) {
+            ui.setStatus(t('image.noColorsFound'), 'error');
+            log('❌ Timeout esperando paleta de colores (2 min)');
+            return false;
+          }
+          
+          // Verificar si el bot fue detenido durante la espera
+          if (!imageState.colorsChecked && !imageState.imageLoaded && Date.now() - startTime > 5000) {
+            // Si despues de 5s sigue sin colores, actualizar estado periodicamente
+            log(`⏳ Aun esperando paleta... (${Math.floor((Date.now() - startTime) / 1000)}s)`);
+          }
+        }
+        
+        log(`✅ Paleta detectada despues de ${Math.floor((Date.now() - startTime) / 1000)}s`);
       }
       
       // Almacenar colores detectados en el estado global
@@ -303,241 +325,116 @@ export async function runImage() {
       },
       
       onSelectPosition: async () => {
-        return new Promise((resolve) => {
-          ui.setStatus(t('image.selectPositionAlert'), 'info');
-          ui.setStatus(t('image.waitingPosition'), 'info');
-          
-          imageState.selectingPosition = true;
-          let positionCaptured = false;
-          
-          // Método 1: Interceptar fetch (método original mejorado)
-          const setupFetchInterception = () => {
-            window.fetch = async (url, options) => {
-              // Solo interceptar requests específicos de pintado cuando estamos seleccionando posición
-              if (imageState.selectingPosition && 
-                  !positionCaptured &&
-                  typeof url === 'string' && 
-                  url.includes('/s0/pixel/') && 
-                  options && 
-                  options.method === 'POST') {
-                
-                try {
-                  log(`🎯 Interceptando request de pintado: ${url}`);
-                  
-                  const response = await originalFetch(url, options);
-                  
-                  if (response.ok && options.body) {
-                    let bodyData;
-                    try {
-                      bodyData = JSON.parse(options.body);
-                    } catch (parseError) {
-                      log('Error parseando body del request:', parseError);
-                      return response;
-                    }
-                    
-                    if (bodyData.coords && Array.isArray(bodyData.coords) && bodyData.coords.length >= 2) {
-                      const localX = bodyData.coords[0];
-                      const localY = bodyData.coords[1];
-                      
-                      // Extraer tile de la URL de forma más robusta
-                      const tileMatch = url.match(/\/s0\/pixel\/(-?\d+)\/(-?\d+)/);
-                      if (tileMatch && !positionCaptured) {
-                        positionCaptured = true;
-                        const tileX = parseInt(tileMatch[1]);
-                        const tileY = parseInt(tileMatch[2]);
-                        
-                        // Guardar coordenadas tile/pixel
-                        imageState.tileX = tileX;
-                        imageState.tileY = tileY;
-                        imageState.startPosition = { x: localX, y: localY };
-                        imageState.selectingPosition = false;
-                        
-                        // Actualizar coordenadas del procesador Blue Marble
-                        if (imageState.imageData && imageState.imageData.processor) {
-                          const processor = imageState.imageData.processor;
-                          processor.setCoords(tileX, tileY, localX, localY);
-                          
-                          // Generar tiles de template una vez que tenemos coordenadas
-                          try {
-                            await processor.createTemplateTiles();
-                            log(`✅ [BLUE MARBLE] Template tiles creados para posición tile(${tileX},${tileY}) pixel(${localX},${localY})`);
-                          } catch (error) {
-                            log(`❌ [BLUE MARBLE] Error creando template tiles: ${error.message}`);
-                          }
-                          
-                          // Regenerar cola de píxeles con coordenadas actualizadas
-                          const pixelQueue = processor.generatePixelQueue();
-                          imageState.remainingPixels = pixelQueue;
-                          // No sobrescribir totalPixels si ya fue establecido por el análisis inicial
-                          if (!imageState.totalPixels || imageState.totalPixels === 0) {
-                            imageState.totalPixels = pixelQueue.length;
-                          }
-                          
-                          log(`✅ Cola de píxeles generada: ${pixelQueue.length} píxeles para overlay`);
-                        }
-                        
-                        // Configurar overlay del plan con la posición seleccionada
-                        try {
-                          if (window.__WPA_PLAN_OVERLAY__) {
-                            // FIX: Forzar reinicio completo del overlay
-                            // Desactivar overlay para limpiar estado anterior
-                            window.__WPA_PLAN_OVERLAY__.setEnabled(false);
-                            
-                            // Limpiar plan anterior
-                            window.__WPA_PLAN_OVERLAY__.setPlan([], {});
-                            
-                            // Inyectar estilos y reactivar
-                            window.__WPA_PLAN_OVERLAY__.injectStyles();
-                            window.__WPA_PLAN_OVERLAY__.setEnabled(true);
-                            
-                            // Configurar ancla lógica (tile/pixel) para posicionamiento
-                            window.__WPA_PLAN_OVERLAY__.setAnchor({
-                              tileX: tileX,
-                              tileY: tileY,
-                              pxX: localX,
-                              pxY: localY
-                            });
-                            
-                            // Usar la cola de píxeles regenerada
-                            if (imageState.remainingPixels && imageState.remainingPixels.length > 0) {
-                              window.__WPA_PLAN_OVERLAY__.setPlan(imageState.remainingPixels, {
-                                anchor: { tileX: tileX, tileY: tileY, pxX: localX, pxY: localY },
-                                imageWidth: imageState.imageData.width,
-                                imageHeight: imageState.imageData.height,
-                                enabled: true
-                              });
-                              
-                              log(`✅ Plan overlay reiniciado y anclado en tile(${tileX},${tileY}) local(${localX},${localY})`);
-                            } else {
-                              log(`⚠️ No hay píxeles para mostrar en overlay`);
-                            }
-                          }
-                        } catch (error) {
-                          log(`❌ Error configurando overlay: ${error.message}`);
-                        }
-                        
-                        // Restaurar fetch original inmediatamente
-                        restoreFetch();
-                        
-                        ui.setStatus(t('image.positionSet'), 'success');
-                        log(`✅ Posición establecida: tile(${imageState.tileX},${imageState.tileY}) local(${localX},${localY})`);
-                        
-                        // Mostrar diálogo del guard después de seleccionar posición
-                        setTimeout(async () => {
-                          try {
-                            log('🛡️ Mostrando diálogo de Auto-Guard...');
-                            const userWantsGuard = await showGuardDialog(imageState, texts);
-                            if (userWantsGuard) {
-                              log('✅ Usuario aceptó generar JSON para Auto-Guard');
-                              // Generar datos compatibles con Auto-Guard
-                              let guardData = null;
-                              if (typeof ui.generateGuardJSON === 'function') {
-                                guardData = ui.generateGuardJSON();
-                              } else {
-                                throw new Error('generateGuardJSON no está disponible en la UI');
-                              }
-                              await saveGuardJSON(guardData);
-                            } else {
-                              log('ℹ️ Usuario decidió no generar JSON para Auto-Guard');
-                            }
-                          } catch (error) {
-                            log('❌ Error mostrando diálogo de Auto-Guard:', error);
-                          }
-                        }, 1000);
-                        
-                        resolve(true);
-                      } else {
-                        log('⚠️ No se pudo extraer tile de la URL:', url);
-                      }
-                    }
-                  }
-                  
-                  return response;
-                } catch (error) {
-                  log('❌ Error interceptando pixel:', error);
-                  // En caso de error, restaurar fetch y continuar con el original
-                  if (!positionCaptured) {
-                    restoreFetch();
-                    return originalFetch(url, options);
-                  }
-                }
+        // Leer coordenadas del DOM (bm-y o bm-h),
+        // el usuario debe hacer click en el canvas primero
+        function extractCoordsFromPage() {
+          try {
+            const ids = ["bm-y", "bm-h"];
+            for (const id of ids) {
+              const el = document.getElementById(id);
+              if (!el) continue;
+              const text = String(el.textContent || el.innerText || "").trim();
+              if (!text) continue;
+              // Formato: tileX tileY localX localY
+              const match = text.match(/(-?\d+)[^\d-]+(-?\d+)[^\d-]+(-?\d+)[^\d-]+(-?\d+)/);
+              if (match && match.length >= 5) {
+                return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
               }
-              
-              // Para todos los demás requests, usar fetch original
-              return originalFetch(url, options);
-            };
-          };
-          
-          // Método 2: Observer de canvas para detectar cambios visuales
-          const setupCanvasObserver = () => {
-            const canvasElements = document.querySelectorAll('canvas');
-            if (canvasElements.length === 0) {
-              log('⚠️ No se encontraron elementos canvas');
-              return;
+              const nums = Array.from(text.matchAll(/-?\d+/g)).map(m => Number(m[0]));
+              if (nums.length >= 4) {
+                return nums.slice(0, 4);
+              }
             }
-            
-            log(`📊 Configurando observer para ${canvasElements.length} canvas`);
-            
-            // Escuchar eventos de click en el documento para detectar pintado
-            const clickHandler = (event) => {
-              if (!imageState.selectingPosition || positionCaptured) return;
-              
-              // Verificar si el click fue en un canvas
-              const target = event.target;
-              if (target && target.tagName === 'CANVAS') {
-                log('🖱️ Click detectado en canvas durante selección');
-                // Calcular coordenadas CSS relativas al contenedor del board para ancla CSS
-                try {
-                  const board = document.querySelector('canvas')?.parentElement || document.body;
-                  const rect = board.getBoundingClientRect();
-                  const cssX = event.clientX - rect.left;
-                  const cssY = event.clientY - rect.top;
-                  if (window.__WPA_PLAN_OVERLAY__) {
-                    window.__WPA_PLAN_OVERLAY__.setAnchorCss(cssX, cssY);
-                    log(`Plan overlay: ancla CSS establecida en (${cssX}, ${cssY})`);
-                  }
-                } catch (e) {
-                  log('Plan Overlay: error calculando ancla CSS', e);
-                }
-                
-                // Dar tiempo para que se procese el pintado
-                setTimeout(() => {
-                  if (!positionCaptured && imageState.selectingPosition) {
-                    log('🔍 Buscando requests recientes de pintado...');
-                    // El fetch interceptor manejará la captura
-                  }
-                }, 500);
-              }
-            };
-            
-            document.addEventListener('click', clickHandler);
-            
-            // Limpiar observer al finalizar
-            imageState.cleanupObserver = () => {
-              document.removeEventListener('click', clickHandler);
-            };
-          };
+          } catch (err) {}
+          return null;
+        }
+        
+        ui.setStatus(t('image.selectPositionAlert'), 'info');
+        
+        const coords = extractCoordsFromPage();
+        if (!coords) {
+          ui.setStatus('❌ 请先在画布上点击一个像素，然后再点击"选择位置"按钮', 'error');
+          log('❌ No se pudieron leer coordenadas del DOM (bm-y/bm-h)');
+          return false;
+        }
+        
+        const [tileX, tileY, localX, localY] = coords;
+        
+        // Guardar coordenadas
+        imageState.tileX = tileX;
+        imageState.tileY = tileY;
+        imageState.startPosition = { x: localX, y: localY };
+        
+        // Actualizar procesador Blue Marble
+        if (imageState.imageData && imageState.imageData.processor) {
+          const processor = imageState.imageData.processor;
+          processor.setCoords(tileX, tileY, localX, localY);
           
-          // Configurar ambos métodos
-          setupFetchInterception();
-          setupCanvasObserver();
+          try {
+            await processor.createTemplateTiles();
+            log(`✅ [BLUE MARBLE] Template tiles creados para posicion tile(${tileX},${tileY}) pixel(${localX},${localY})`);
+          } catch (error) {
+            log(`❌ [BLUE MARBLE] Error creando template tiles: ${error.message}`);
+          }
           
-          // Timeout para selección de posición con cleanup mejorado
-          const timeoutId = setTimeout(() => {
-            if (imageState.selectingPosition && !positionCaptured) {
-              restoreFetch();
-              if (imageState.cleanupObserver) {
-                imageState.cleanupObserver();
-              }
-              ui.setStatus(t('image.positionTimeout'), 'error');
-              log('⏰ Timeout en selección de posición');
-              resolve(false);
+          const pixelQueue = processor.generatePixelQueue();
+          imageState.remainingPixels = pixelQueue;
+          if (!imageState.totalPixels || imageState.totalPixels === 0) {
+            imageState.totalPixels = pixelQueue.length;
+          }
+          log(`✅ Cola de pixeles generada: ${pixelQueue.length} pixeles para overlay`);
+        }
+        
+        // Configurar overlay del plan
+        try {
+          if (window.__WPA_PLAN_OVERLAY__) {
+            window.__WPA_PLAN_OVERLAY__.setEnabled(false);
+            window.__WPA_PLAN_OVERLAY__.setPlan([], {});
+            window.__WPA_PLAN_OVERLAY__.injectStyles();
+            window.__WPA_PLAN_OVERLAY__.setEnabled(true);
+            window.__WPA_PLAN_OVERLAY__.setAnchor({
+              tileX, tileY, pxX: localX, pxY: localY
+            });
+            if (imageState.remainingPixels && imageState.remainingPixels.length > 0) {
+              window.__WPA_PLAN_OVERLAY__.setPlan(imageState.remainingPixels, {
+                anchor: { tileX, tileY, pxX: localX, pxY: localY },
+                imageWidth: imageState.imageData.width,
+                imageHeight: imageState.imageData.height,
+                enabled: true
+              });
+              log(`✅ Plan overlay anclado en tile(${tileX},${tileY}) local(${localX},${localY})`);
             }
-          }, 120000); // 2 minutos
-          
-          // Guardar timeout para poder cancelarlo
-          imageState.positionTimeoutId = timeoutId;
-        });
+          }
+        } catch (error) {
+          log(`❌ Error configurando overlay: ${error.message}`);
+        }
+        
+        ui.setStatus(t('image.positionSet'), 'success');
+        log(`✅ Posicion establecida: tile(${tileX},${tileY}) local(${localX},${localY})`);
+        
+        // Mostrar dialogo del guard
+        setTimeout(async () => {
+          try {
+            log('🛡️ Mostrando dialogo de Auto-Guard...');
+            const userWantsGuard = await showGuardDialog(imageState, texts);
+            if (userWantsGuard) {
+              log('✅ Usuario acepto generar JSON para Auto-Guard');
+              let guardData = null;
+              if (typeof ui.generateGuardJSON === 'function') {
+                guardData = ui.generateGuardJSON();
+              } else {
+                throw new Error('generateGuardJSON no esta disponible en la UI');
+              }
+              await saveGuardJSON(guardData);
+            } else {
+              log('ℹ️ Usuario decidio no generar JSON para Auto-Guard');
+            }
+          } catch (error) {
+            log('❌ Error mostrando dialogo de Auto-Guard:', error);
+          }
+        }, 1000);
+        
+        return true;
       },
       
       onStartPainting: async () => {
